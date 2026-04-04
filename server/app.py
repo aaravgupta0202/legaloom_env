@@ -2,17 +2,19 @@
 FastAPI server for LegaLoom-Env.
 """
 
+import sys
+import os
+
+# Ensure /app is on the path so absolute imports work
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 try:
     from openenv.core.env_server.http_server import create_app
 except Exception as e:
     raise ImportError("openenv is required. Run: pip install openenv-core") from e
 
-try:
-    from ..models import TDSAction, TDSObservation
-    from .legaloom_env_environment import LegaloomEnvironment
-except ModuleNotFoundError:
-    from models import TDSAction, TDSObservation
-    from server.legaloom_env_environment import LegaloomEnvironment
+from models import TDSAction, TDSObservation
+from server.legaloom_env_environment import LegaloomEnvironment
 
 
 app = create_app(
@@ -24,7 +26,7 @@ app = create_app(
 )
 
 
-def main(host: str = "0.0.0.0", port: int = 8000):
+def main(host: str = "0.0.0.0", port: int = 7860):
     import uvicorn
     uvicorn.run(app, host=host, port=port)
 
