@@ -1,18 +1,29 @@
 """
 inference.py — LegaLoom-Env Baseline Inference Script
 
-Mandatory variables:
-    API_BASE_URL  : LLM endpoint
-    MODEL_NAME    : model identifier
-    HF_TOKEN      : Hugging Face / API key
+Mandatory variables (set these before running):
+    API_BASE_URL     : LLM endpoint
+    MODEL_NAME       : model identifier
+    HF_TOKEN         : Hugging Face API key (no default — must be set)
+    LOCAL_IMAGE_NAME : Docker image name (optional, only if using docker)
 
-Stdout format (strictly enforced):
+How to run:
+    Windows:
+        set HF_TOKEN=hf_xxxxxxxxxxxxxxxx
+        set API_BASE_URL=https://router.huggingface.co/v1
+        set MODEL_NAME=Qwen/Qwen2.5-72B-Instruct
+        python inference.py
+
+    Linux/Mac:
+        export HF_TOKEN=hf_xxxxxxxxxxxxxxxx
+        python inference.py
+
+Stdout format (strictly enforced by hackathon spec):
     [START] task=<task_id> env=legaloom_env model=<model>
     [STEP]  step=<n> action=<str> reward=<0.00> done=<true|false> error=<msg|null>
-    [END]   success=<true|false> steps=<n> score=<0.000> rewards=<r1,r2,...>
+    [END]   success=<true|false> steps=<n> rewards=<r1,r2,...,rn>
 """
 
-import asyncio
 import json
 import os
 import sys
@@ -21,14 +32,21 @@ from typing import List, Optional
 
 from openai import OpenAI
 
-API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
-MODEL_NAME   = os.getenv("MODEL_NAME",   "Qwen/Qwen2.5-72B-Instruct")
-API_KEY      = os.getenv("HF_TOKEN") or os.getenv("API_KEY", "")
+# ---------------------------------------------------------------------------
+# Mandatory environment variables — per hackathon spec
+# API_BASE_URL and MODEL_NAME have defaults
+# HF_TOKEN has NO default (must be provided by the evaluator)
+# ---------------------------------------------------------------------------
+API_BASE_URL     = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
+MODEL_NAME       = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
+HF_TOKEN         = os.getenv("HF_TOKEN")
+API_KEY          = HF_TOKEN or os.getenv("API_KEY")
+LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
 
-BENCHMARK    = "legaloom_env"
-MAX_STEPS    = 8
-TEMPERATURE  = 0.2
-MAX_TOKENS   = 512
+BENCHMARK   = "legaloom_env"
+MAX_STEPS   = 8
+TEMPERATURE = 0.2
+MAX_TOKENS  = 512
 
 
 def log_start(task: str, env: str, model: str) -> None:
@@ -37,8 +55,8 @@ def log_start(task: str, env: str, model: str) -> None:
 
 def log_step(step: int, action: str, reward: float,
              done: bool, error: Optional[str]) -> None:
-    error_val = error if error else "null"
-    done_val  = str(done).lower()
+    error_val    = error if error else "null"
+    done_val     = str(done).lower()
     action_clean = action.replace("\n", " ").replace("\r", "")[:200]
     print(
         f"[STEP] step={step} action={action_clean} "
@@ -47,12 +65,10 @@ def log_step(step: int, action: str, reward: float,
     )
 
 
-def log_end(success: bool, steps: int, score: float,
-            rewards: List[float]) -> None:
+def log_end(success: bool, steps: int, rewards: List[float]) -> None:
     rewards_str = ",".join(f"{r:.2f}" for r in rewards)
     print(
-        f"[END] success={str(success).lower()} steps={steps} "
-        f"score={score:.3f} rewards={rewards_str}",
+        f"[END] success={str(success).lower()} steps={steps} rewards={rewards_str}",
         flush=True,
     )
 
@@ -91,20 +107,19 @@ Key TDS rules:
 - Always check PAN before computing the deduction
 
 Strategy:
-  Step 1 → read_invoice
-  Step 2 → check_pan (use PAN from invoice)
-  Step 3 → lookup_section (use service description from invoice)
-  Step 4 → submit_answer (compute amount = taxable_amount x rate / 100)
+  Step 1 -> read_invoice
+  Step 2 -> check_pan (use PAN from invoice)
+  Step 3 -> lookup_section (use service description from invoice)
+  Step 4 -> submit_answer (compute amount = taxable_amount x rate / 100)
 
 Output ONLY the JSON object. Nothing else.
 """).strip()
 
 
 def build_user_prompt(step: int, obs: dict, history: List[str]) -> str:
-    history_block = "\n".join(history[-6:]) if history else "None"
-    invoice_block = obs.get("invoice_text", "")
+    history_block   = "\n".join(history[-6:]) if history else "None"
+    invoice_block   = obs.get("invoice_text", "")
     invoice_section = f"\nINVOICE:\n{invoice_block}\n" if invoice_block else ""
-
     return textwrap.dedent(f"""
 Step {step} of {obs.get('max_steps', 8)}.
 {invoice_section}
@@ -153,15 +168,15 @@ def run_episode(client: OpenAI, env, task_id: str) -> dict:
 
     rewards: List[float] = []
     history: List[str]   = []
-    steps_taken  = 0
-    success      = False
-    score        = 0.0
+    steps_taken = 0
+    success     = False
+    score       = 0.0
 
     log_start(task=task_id, env=BENCHMARK, model=MODEL_NAME)
 
     try:
         result = env.reset(task_id=task_id)
-        # Local env returns observation directly; HTTP client wraps it in StepResult
+
         if hasattr(result, 'observation'):
             obs  = result.observation.__dict__ if hasattr(result.observation, '__dict__') else {}
             done = result.done
@@ -223,8 +238,7 @@ def run_episode(client: OpenAI, env, task_id: str) -> dict:
         print(f"[DEBUG] Episode error for {task_id}: {e}", flush=True)
 
     finally:
-        log_end(success=success, steps=steps_taken,
-                score=score, rewards=rewards)
+        log_end(success=success, steps=steps_taken, rewards=rewards)
 
     return {"task_id": task_id, "score": score,
             "success": success, "steps": steps_taken}
