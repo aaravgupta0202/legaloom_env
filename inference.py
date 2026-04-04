@@ -161,8 +161,13 @@ def run_episode(client: OpenAI, env, task_id: str) -> dict:
 
     try:
         result = env.reset(task_id=task_id)
-        obs    = result.observation.__dict__ if hasattr(result.observation, '__dict__') else {}
-        done   = result.done
+        # Local env returns observation directly; HTTP client wraps it in StepResult
+        if hasattr(result, 'observation'):
+            obs  = result.observation.__dict__ if hasattr(result.observation, '__dict__') else {}
+            done = result.done
+        else:
+            obs  = result.__dict__ if hasattr(result, '__dict__') else {}
+            done = getattr(result, 'done', False)
 
         for step in range(1, MAX_STEPS + 1):
             if done:
@@ -184,9 +189,14 @@ def run_episode(client: OpenAI, env, task_id: str) -> dict:
                     action_type=action_type,
                     parameters=parameters,
                 ))
-                obs    = result.observation.__dict__ if hasattr(result.observation, '__dict__') else {}
-                reward = float(result.reward or 0.0)
-                done   = result.done
+                if hasattr(result, 'observation'):
+                    obs    = result.observation.__dict__ if hasattr(result.observation, '__dict__') else {}
+                    reward = float(result.reward or 0.0)
+                    done   = result.done
+                else:
+                    obs    = result.__dict__ if hasattr(result, '__dict__') else {}
+                    reward = float(getattr(result, 'reward', 0.0) or 0.0)
+                    done   = getattr(result, 'done', False)
             except Exception as e:
                 reward = 0.0
                 done   = False
