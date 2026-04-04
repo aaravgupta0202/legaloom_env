@@ -35,12 +35,14 @@ class LegaloomEnvironment(Environment):
         self._invoice_read = False
         self._reward_earned = {}
         self._episode_reward = 0.0
+        self._current_task_id = "task_easy"
 
     def reset(self, task_id: str = "task_easy", **kwargs) -> TDSObservation:
         if task_id not in all_task_ids():
             task_id = "task_easy"
 
         self._task = get_task(task_id)
+        self._current_task_id = task_id
         self._invoice_read = False
         self._reward_earned = {k: False for k in self._task["reward_breakpoints"]}
         self._episode_reward = 0.0
@@ -72,9 +74,9 @@ class LegaloomEnvironment(Environment):
         )
 
     def step(self, action: TDSAction, **kwargs) -> TDSObservation:
-        # Guard: if reset() was never called, auto-initialise with task_easy
+        # Guard: reinitialise with last known task if state was lost
         if self._task is None:
-            self.reset(task_id="task_easy")
+            self.reset(task_id=self._current_task_id)
 
         self._state.step_count += 1
         steps_used = self._state.step_count
