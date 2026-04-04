@@ -72,6 +72,10 @@ class LegaloomEnvironment(Environment):
         )
 
     def step(self, action: TDSAction, **kwargs) -> TDSObservation:
+        # Guard: if reset() was never called, auto-initialise with task_easy
+        if self._task is None:
+            self.reset(task_id="task_easy")
+
         self._state.step_count += 1
         steps_used = self._state.step_count
         max_steps = self._task["max_steps"]
