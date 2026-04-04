@@ -1,10 +1,7 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-#
-# This source code is licensed under the BSD-style license found in the
-# LICENSE file in the root directory of this source tree.
-
-"""Legaloom Env Environment Client."""
+"""
+LegaLoom-Env Client.
+WebSocket client that training code imports to interact with the environment.
+"""
 
 from typing import Dict
 
@@ -12,88 +9,54 @@ from openenv.core import EnvClient
 from openenv.core.client_types import StepResult
 from openenv.core.env_server.types import State
 
-from .models import LegaloomAction, LegaloomObservation
+from .models import TDSAction, TDSObservation, TDSState
 
 
-class LegaloomEnv(
-    EnvClient[LegaloomAction, LegaloomObservation, State]
-):
+class LegaloomEnv(EnvClient[TDSAction, TDSObservation, TDSState]):
     """
-    Client for the Legaloom Env Environment.
+    Client for the LegaLoom TDS Compliance Environment.
 
-    This client maintains a persistent WebSocket connection to the environment server,
-    enabling efficient multi-step interactions with lower latency.
-    Each client instance has its own dedicated environment session on the server.
-
-    Example:
-        >>> # Connect to a running server
-        >>> with LegaloomEnv(base_url="http://localhost:8000") as client:
-        ...     result = client.reset()
-        ...     print(result.observation.echoed_message)
-        ...
-        ...     result = client.step(LegaloomAction(message="Hello!"))
-        ...     print(result.observation.echoed_message)
-
-    Example with Docker:
-        >>> # Automatically start container and connect
-        >>> client = LegaloomEnv.from_docker_image("legaloom_env-env:latest")
-        >>> try:
-        ...     result = client.reset()
-        ...     result = client.step(LegaloomAction(message="Test"))
-        ... finally:
-        ...     client.close()
+    Example usage:
+        with LegaloomEnv(base_url="http://localhost:8000").sync() as env:
+            result = env.reset(task_id="task_easy")
+            result = env.step(TDSAction(
+                action_type="read_invoice",
+                parameters={}
+            ))
+            print(result.observation.invoice_text)
     """
 
-    def _step_payload(self, action: LegaloomAction) -> Dict:
-        """
-        Convert LegaloomAction to JSON payload for step message.
-
-        Args:
-            action: LegaloomAction instance
-
-        Returns:
-            Dictionary representation suitable for JSON encoding
-        """
+    def _step_payload(self, action: TDSAction) -> Dict:
         return {
-            "message": action.message,
+            "action_type": action.action_type,
+            "parameters":  action.parameters,
         }
 
-    def _parse_result(self, payload: Dict) -> StepResult[LegaloomObservation]:
-        """
-        Parse server response into StepResult[LegaloomObservation].
-
-        Args:
-            payload: JSON response data from server
-
-        Returns:
-            StepResult with LegaloomObservation
-        """
+    def _parse_result(self, payload: Dict) -> StepResult[TDSObservation]:
         obs_data = payload.get("observation", {})
-        observation = LegaloomObservation(
-            echoed_message=obs_data.get("echoed_message", ""),
-            message_length=obs_data.get("message_length", 0),
+        observation = TDSObservation(
             done=payload.get("done", False),
-            reward=payload.get("reward"),
-            metadata=obs_data.get("metadata", {}),
+            reward=payload.get("reward", 0.0),
+            invoice_text=obs_data.get("invoice_text", ""),
+            action_result=obs_data.get("action_result", ""),
+            available_actions=obs_data.get("available_actions", []),
+            steps_used=obs_data.get("steps_used", 0),
+            max_steps=obs_data.get("max_steps", 8),
+            hint=obs_data.get("hint", ""),
         )
-
         return StepResult(
             observation=observation,
-            reward=payload.get("reward"),
+            reward=payload.get("reward", 0.0),
             done=payload.get("done", False),
         )
 
-    def _parse_state(self, payload: Dict) -> State:
-        """
-        Parse server response into State object.
-
-        Args:
-            payload: JSON response from state request
-
-        Returns:
-            State object with episode_id and step_count
-        """
-        return State(
+    def _parse_state(self, payload: Dict) -> TDSState:
+        return TDSState(
             episode_id=payload.get("episode_id"),
             step_count=payload.get("step_count", 0),
+            task_id=payload.get("task_id", ""),
+            difficulty=payload.get("difficulty", ""),
+            pan_checked=payload.get("pan_checked", False),
+            section_identified=payload.get("section_identified", False),
+            answer_submitted=payload.get("answer_submitted", False),
         )
