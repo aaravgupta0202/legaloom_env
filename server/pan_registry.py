@@ -68,7 +68,7 @@ def is_company(pan: str) -> bool:
     record = lookup_pan(pan)
     if record is None:
         return True  # safe default
-    return record["pan_type"] in ("company", "llp", "firm")
+    return record["pan_type"] in ("company", "llp")
 
 
 def pan_status_message(pan: str) -> str:
@@ -83,8 +83,12 @@ def pan_status_message(pan: str) -> str:
             "TDS rate: 20% regardless of section — Section 206AA applies. "
             "CBDT Circular 6/2024 does not provide relief for FY 2025-26."
         )
+    pan_type = record['pan_type']
+    if pan_type in ('individual', 'firm'):
+        rate_note = 'Individual/firm rate applies (e.g. 194C @ 1%, not 2%).'
+    else:
+        rate_note = 'Company rate applies (e.g. 194C @ 2%).'
     return (
         f"PAN {pan} ({record['name']}) is operative and valid. "
-        f"Vendor type: {record['pan_type']}. "
-        "Apply section rate as applicable."
+        f"Vendor type: {pan_type}. {rate_note}"
     )
