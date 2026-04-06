@@ -520,14 +520,31 @@ def classify_service(description: str, vendor_is_company: bool = True) -> dict:
                   "inventory purchase", "merchandise purchase",
                   "industrial equipment purchase", "machine purchase"], False),
 
-        # 194C — Contractors (before 194J to avoid confusion)
+        # 194C — Contractors (after 194J_PROFESSIONAL to avoid false positives)
         ("194C", ["catering", "housekeeping", "facility management",
                   "security services", "security guard", "manpower supply",
                   "labour supply", "labour contract", "labor contract",
                   "event management", "event organiser",
                   "transportation services", "courier", "printing",
-                  "advertising production", "construction",
+                  "advertising production",
+                  "construction work", "construction contract",  # NOT 'construction' alone
                   "contract staffing", "manpower"], False),
+
+        # 194J Professional — individual/LLP (10%) — check BEFORE technical
+        # Key: consultancy/advisory keywords must beat 194C construction keyword
+        ("194J_PROFESSIONAL", ["legal", "advocate", "law firm",
+                                "audit", "chartered accountant", "ca firm",
+                                "medical", "doctor", "architect",
+                                "engineering consultancy",
+                                "company secretary", "interior design",
+                                "management consulting", "management consultancy",
+                                "project management consultancy",
+                                "structural engineering", "mep consultancy",
+                                "advisory", "consulting retainer",
+                                "project management", "valuation",
+                                "due diligence", "tax consulting",
+                                "secretarial", "regulatory",
+                                "arbitration", "litigation"], False),
 
         # 194J Technical — company vendors (2%)
         ("194J_TECHNICAL", ["it support", "technical support", "cloud",
@@ -537,15 +554,6 @@ def classify_service(description: str, vendor_is_company: bool = True) -> dict:
                              "amc", "annual maintenance",
                              "managed services", "platform",
                              "saas", "infrastructure services"], True),
-
-        # 194J Professional — individual/LLP (10%)
-        ("194J_PROFESSIONAL", ["legal", "advocate", "law firm",
-                                "audit", "chartered accountant", "ca firm",
-                                "medical", "doctor", "architect",
-                                "engineering consultancy",
-                                "company secretary", "interior design",
-                                "management consulting", "advisory",
-                                "consulting retainer"], False),
     ]
 
     for section, keywords, requires_company in classification_rules:
