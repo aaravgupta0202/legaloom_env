@@ -209,10 +209,15 @@ def get_agent_action(client: OpenAI, step: int, obs: dict,
 
     except json.JSONDecodeError as e:
         print(f"[DEBUG] JSON parse error at step {step}: {e}", flush=True)
-        return {"action_type": "read_invoice", "parameters": {}}
+        return {"action_type": "submit_answer",
+                "parameters": {"tds_amount_inr": 0.0, "section": "194J",
+                                "rate_percent": 0.0, "no_tds": "true"}}
     except Exception as e:
         print(f"[DEBUG] LLM call failed at step {step}: {e}", flush=True)
-        return {"action_type": "read_invoice", "parameters": {}}
+        # On API failure, submit a graceful exit rather than looping
+        return {"action_type": "submit_answer",
+                "parameters": {"tds_amount_inr": 0.0, "section": "194J",
+                                "rate_percent": 0.0, "no_tds": "true"}}
 
 
 # ---------------------------------------------------------------------------
