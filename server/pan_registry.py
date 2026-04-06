@@ -1,37 +1,57 @@
 """
-PAN Registry for LegaLoom-Env.
-Mock database of vendor PAN numbers and their operative status.
-In production this would call the Income Tax e-filing API.
+PAN Registry for LegaLoom-Env — FY 2025-26
+Complete vendor PAN database covering all 260 invoices.
+Inoperative PANs trigger 20% TDS under Section 206AA.
 """
 
 from typing import Optional
 
 PAN_DB = {
-    "ABCDE1234F": {
-        "name": "Sharma & Associates LLP",
-        "status": "operative",
-        "pan_type": "company",
-    },
-    "BCDFE5678G": {
-        "name": "TechServ Solutions Pvt Ltd",
-        "status": "operative",
-        "pan_type": "company",
-    },
-    "CDEFG9012H": {
-        "name": "Rajesh Kumar",
-        "status": "operative",
-        "pan_type": "individual",
-    },
-    "PQRST1122A": {
-        "name": "QuickCater Services",
-        "status": "operative",
-        "pan_type": "company",
-    },
-    "ZZZZZ9999Z": {
-        "name": "CloudMatrix Infrastructure Pvt Ltd",
-        "status": "inoperative",
-        "pan_type": "company",
-    },
+    # ── Inoperative PANs (not linked to Aadhaar) ────────────────────────────
+    "ZZZZZ9999Z": {"name": "CloudMatrix Infrastructure Pvt Ltd", "status": "inoperative", "pan_type": "company"},
+    "AAAAA1111A": {"name": "Alpha Tech Services Pvt Ltd",        "status": "inoperative", "pan_type": "company"},
+    "BBBBB2222B": {"name": "Beta Consulting LLP",                "status": "inoperative", "pan_type": "llp"},
+    "CCCCC3333C": {"name": "Gamma Security Pvt Ltd",             "status": "inoperative", "pan_type": "company"},
+
+    # ── Professional services ─────────────────────────────────────────────────
+    "ABCDS1234F": {"name": "Sharma & Associates LLP",            "status": "operative",   "pan_type": "llp"},
+    "ABCCK5678G": {"name": "Kapoor & Mehta Chartered Accountants","status": "operative",  "pan_type": "firm"},
+    "ABCPG2345H": {"name": "Priya Gupta & Co (CS)",              "status": "operative",   "pan_type": "individual"},
+    "ABCVA3456J": {"name": "Verma Architects LLP",               "status": "operative",   "pan_type": "llp"},
+    "ABCDM4567K": {"name": "Dr Suresh Mehta (Physician)",        "status": "operative",   "pan_type": "individual"},
+    "ABCJT5678L": {"name": "Joshi Tax Consultants LLP",          "status": "operative",   "pan_type": "llp"},
+    "ABCII6789M": {"name": "Iyer Interior Design Studio",        "status": "operative",   "pan_type": "individual"},
+
+    # ── Technical services / IT companies ────────────────────────────────────
+    "AABCT1234C": {"name": "TechServ Solutions Pvt Ltd",         "status": "operative",   "pan_type": "company"},
+    "AABCI2345D": {"name": "Infovision Consulting Pvt Ltd",      "status": "operative",   "pan_type": "company"},
+    "AABCD3456E": {"name": "DataPro Analytics Pvt Ltd",          "status": "operative",   "pan_type": "company"},
+    "AABCN4567F": {"name": "Nexus BPO Services Pvt Ltd",         "status": "operative",   "pan_type": "company"},
+    "AABCW5678G": {"name": "WebCraft Technologies Pvt Ltd",      "status": "operative",   "pan_type": "company"},
+    "AABCS6789H": {"name": "SysNet IT Solutions Pvt Ltd",        "status": "operative",   "pan_type": "company"},
+    "AABCP7890J": {"name": "CloudPeak Services Pvt Ltd",         "status": "operative",   "pan_type": "company"},
+
+    # ── Contractors ───────────────────────────────────────────────────────────
+    "PQRST1122A": {"name": "QuickCater Services",                "status": "operative",   "pan_type": "company"},
+    "AABCG1234B": {"name": "Guardian Security Solutions Pvt Ltd","status": "operative",   "pan_type": "company"},
+    "PQRSC2345B": {"name": "CleanPro Facility Management",       "status": "operative",   "pan_type": "company"},
+    "AABCE3456C": {"name": "EventCraft Pvt Ltd",                 "status": "operative",   "pan_type": "company"},
+    "PQRSP4567C": {"name": "PrintWell Enterprises",              "status": "operative",   "pan_type": "firm"},
+    "AABCM5678D": {"name": "Manpower Solutions India Pvt Ltd",   "status": "operative",   "pan_type": "company"},
+
+    # ── Rent / property ───────────────────────────────────────────────────────
+    "AABCP8901E": {"name": "Prestige Commercial Properties",     "status": "operative",   "pan_type": "company"},
+    "ABCAK9012F": {"name": "Anand Kumar Sharma",                 "status": "operative",   "pan_type": "individual"},
+    "AABCC0123G": {"name": "ColoSpace Technologies Pvt Ltd",     "status": "operative",   "pan_type": "company"},
+    "AABCE1234H": {"name": "EquipHire Solutions Pvt Ltd",        "status": "operative",   "pan_type": "company"},
+
+    # ── Commission / brokerage ────────────────────────────────────────────────
+    "PQRSS2345H": {"name": "SalesForce Agents",                  "status": "operative",   "pan_type": "firm"},
+    "PQRSR3456J": {"name": "ReferralNet Associates",             "status": "operative",   "pan_type": "firm"},
+
+    # ── 194T partner / 194Q goods ─────────────────────────────────────────────
+    "AABCM6789E": {"name": "Mehta & Sons Trading Co (Partnership)","status": "operative", "pan_type": "firm"},
+    "AABCI7890F": {"name": "Industrial Steel Suppliers Pvt Ltd", "status": "operative",   "pan_type": "company"},
 }
 
 
@@ -41,28 +61,30 @@ def lookup_pan(pan: str) -> Optional[dict]:
 
 def is_pan_valid(pan: str) -> bool:
     record = lookup_pan(pan)
-    if record is None:
-        return False
-    return record["status"] == "operative"
+    return record is not None and record["status"] == "operative"
 
 
 def is_company(pan: str) -> bool:
     record = lookup_pan(pan)
     if record is None:
-        return True
-    return record["pan_type"] == "company"
+        return True  # safe default
+    return record["pan_type"] in ("company", "llp", "firm")
 
 
 def pan_status_message(pan: str) -> str:
     record = lookup_pan(pan)
     if record is None:
-        return f"PAN {pan} not found in registry. TDS rate: 20%."
+        return (f"PAN {pan} not found in registry. "
+                "TDS must be deducted at 20% (Section 206AA — missing PAN).")
     if record["status"] == "inoperative":
         return (
             f"PAN {pan} ({record['name']}) is INOPERATIVE "
-            f"(not linked to Aadhaar). TDS rate: 20% regardless of section."
+            f"(not linked to Aadhaar). "
+            "TDS rate: 20% regardless of section — Section 206AA applies. "
+            "CBDT Circular 6/2024 does not provide relief for FY 2025-26."
         )
     return (
-        f"PAN {pan} ({record['name']}) is operative. "
-        f"Vendor type: {record['pan_type']}."
+        f"PAN {pan} ({record['name']}) is operative and valid. "
+        f"Vendor type: {record['pan_type']}. "
+        "Apply section rate as applicable."
     )

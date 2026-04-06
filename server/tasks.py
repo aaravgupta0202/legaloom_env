@@ -1,159 +1,224 @@
 """
-Task definitions for LegaLoom-Env.
-Three TDS compliance tasks of increasing difficulty.
+tasks.py — LegaLoom-Env Task Definitions (Upgraded)
+
+Four tasks of increasing difficulty, each drawing from the
+260-invoice database. Every reset() picks a random invoice
+from the appropriate difficulty pool.
+
+Task 1 — Easy   : Single service, valid PAN, above threshold
+Task 2 — Medium : Mixed invoice (goods + service) or threshold boundary
+Task 3 — Hard   : Inoperative PAN or GST-bundled base
+Task 4 — Expert : Multiple simultaneous traps
 """
 
-TASK_1 = {
-    "task_id": "task_easy",
-    "difficulty": "easy",
-    "description": "Single invoice, clear professional service under 194J",
-    "max_steps": 6,
-    "invoice": """
-INVOICE
+import json
+import os
+import random
+from typing import Optional
 
-Vendor  : Sharma & Associates LLP
-PAN     : ABCDE1234F
-GSTIN   : 29ABCDE1234F1ZK
-Date    : 12-Nov-2024
-Invoice : INV-2024-0891
+# ---------------------------------------------------------------------------
+# Load invoice database
+# ---------------------------------------------------------------------------
+_DB_PATH = os.path.join(os.path.dirname(__file__), "invoice_db.json")
 
-Services Rendered:
-  Legal Consultation & Advisory Services    INR 1,50,000
+def _load_db() -> list:
+    with open(_DB_PATH, encoding="utf-8") as f:
+        return json.load(f)
 
-  (Retainer for November 2024 — corporate legal advisory)
+_INVOICE_DB: Optional[list] = None
 
-Total Amount Due                            INR 1,50,000
+def get_db() -> list:
+    global _INVOICE_DB
+    if _INVOICE_DB is None:
+        _INVOICE_DB = _load_db()
+    return _INVOICE_DB
 
-Payment Terms: Net 30 days
-Bank: HDFC Bank, A/c: 12345678901234, IFSC: HDFC0001234
-""".strip(),
-    "vendor_pan": "ABCDE1234F",
-    "cumulative_ytd": 0.0,
-    "ground_truth": {
-        "section": "194J",
-        "tds_rate_percent": 10.0,
-        "taxable_amount": 150000.0,
-        "tds_amount_inr": 15000.0,
-        "pan_valid": True,
-        "threshold_applicable": True,
+
+# ---------------------------------------------------------------------------
+# Difficulty pools — which categories go into which task
+# ---------------------------------------------------------------------------
+
+DIFFICULTY_POOLS = {
+    "task_easy": {
+        "difficulty": "easy",
+        "description": "Single invoice, clear service description, valid operative PAN, amount above threshold",
+        "max_steps": 6,
+        "categories": [
+            "194J_professional",
+            "194C_contractor",
+            "194I_rent",
+            "194H_commission",
+        ],
+        "hint_enabled": True,
     },
-    "reward_breakpoints": {
-        "pan_checked": 0.10,
-        "section_correct": 0.30,
-        "rate_correct": 0.20,
-        "amount_exact": 0.40,
+    "task_medium": {
+        "difficulty": "medium",
+        "description": (
+            "Mixed invoice with goods and service line items, or threshold boundary case. "
+            "Agent must split correctly and track cumulative YTD payments."
+        ),
+        "max_steps": 8,
+        "categories": [
+            "mixed_invoice",
+            "threshold_boundary",
+            "194J_technical",
+            "194I_machinery",
+        ],
+        "hint_enabled": True,
     },
-}
-
-TASK_2 = {
-    "task_id": "task_medium",
-    "difficulty": "medium",
-    "description": "Mixed invoice with goods and services; threshold boundary check",
-    "max_steps": 8,
-    "invoice": """
-INVOICE
-
-Vendor  : TechServ Solutions Pvt Ltd
-PAN     : BCDFE5678G
-GSTIN   : 27BCDFE5678G1ZP
-Date    : 05-Dec-2024
-Invoice : INV-2024-1147
-
-Line Items:
-  1. Network Switches (Hardware — 12 units)   INR 95,000
-  2. Annual IT Support & Maintenance Contract INR 85,000
-
-     (Covers helpdesk, on-site support, system monitoring)
-
-Subtotal                                      INR 1,80,000
-GST @18% on Services only                    INR  15,300
-Total Amount Due                              INR 1,95,300
-
-Note: Hardware supplied under separate delivery challan DC-2024-0445.
-Payment Terms: Net 45 days
-""".strip(),
-    "vendor_pan": "BCDFE5678G",
-    "cumulative_ytd": 0.0,
-    "ground_truth": {
-        "section": "194J",
-        "tds_rate_percent": 10.0,
-        "taxable_amount": 85000.0,
-        "tds_amount_inr": 8500.0,
-        "pan_valid": True,
-        "threshold_applicable": True,
-        "goods_amount": 95000.0,
-        "goods_tds": 0.0,
+    "task_hard": {
+        "difficulty": "hard",
+        "description": (
+            "Inoperative PAN (20% override) or GST-bundled invoice (TDS on full amount). "
+            "Agent must check PAN status before computing any rate."
+        ),
+        "max_steps": 8,
+        "categories": [
+            "inoperative_pan",
+            "gst_bundled_tds_base",
+            "below_threshold_new_limits",
+        ],
+        "hint_enabled": False,   # No hints on hard — agent must reason independently
     },
-    "reward_breakpoints": {
-        "pan_checked": 0.10,
-        "goods_excluded": 0.20,
-        "section_correct": 0.20,
-        "rate_correct": 0.10,
-        "amount_exact": 0.40,
+    "task_expert": {
+        "difficulty": "expert",
+        "description": (
+            "Multiple simultaneous traps: split invoices + inoperative PAN, "
+            "or new 194T section + threshold crossing, or high-value 194Q goods. "
+            "Genuinely challenges frontier models."
+        ),
+        "max_steps": 10,
+        "categories": [
+            "194T_partner",
+            "194T_partner_extra",
+            "194Q_goods",
+        ],
+        "hint_enabled": False,
     },
 }
 
-TASK_3 = {
-    "task_id": "task_hard",
-    "difficulty": "hard",
-    "description": "Inoperative PAN detected; 20% fallback rate applies",
-    "max_steps": 8,
-    "invoice": """
-INVOICE
-
-Vendor  : CloudMatrix Infrastructure Pvt Ltd
-PAN     : ZZZZZ9999Z
-GSTIN   : 07ZZZZZ9999Z1ZQ
-Date    : 18-Jan-2025
-Invoice : INV-2025-0042
-
-Services Rendered:
-  Cloud Infrastructure & Platform Services   INR 2,40,000
-
-  (Includes: managed cloud hosting, auto-scaling compute,
-   object storage, CDN access, and 24x7 NOC support
-   for Q4 FY2024-25)
-
-Total Amount Due                             INR 2,40,000
-
-Payment Terms: Net 30 days
-Bank: ICICI Bank, A/c: 987654321098, IFSC: ICIC0001234
-
-** Vendor requests TDS certificate after deduction **
-""".strip(),
-    "vendor_pan": "ZZZZZ9999Z",
-    "cumulative_ytd": 0.0,
-    "ground_truth": {
-        "section": "194J",
-        "tds_rate_percent": 20.0,
-        "taxable_amount": 240000.0,
-        "tds_amount_inr": 48000.0,
-        "pan_valid": False,
-        "threshold_applicable": True,
-        "pan_status": "inoperative",
-    },
-    "reward_breakpoints": {
-        "pan_checked": 0.20,
-        "pan_inoperative_identified": 0.30,
-        "rate_correct": 0.10,
-        "amount_exact": 0.40,
-    },
-}
-
-TASKS = {
-    "task_easy":   TASK_1,
-    "task_medium": TASK_2,
-    "task_hard":   TASK_3,
-}
-
-TASK_ORDER = ["task_easy", "task_medium", "task_hard"]
+TASK_ORDER = ["task_easy", "task_medium", "task_hard", "task_expert"]
 
 
-def get_task(task_id: str) -> dict:
-    if task_id not in TASKS:
-        raise KeyError(f"Unknown task_id: {task_id!r}. Valid: {list(TASKS.keys())}")
-    return TASKS[task_id]
+# ---------------------------------------------------------------------------
+# Task sampling
+# ---------------------------------------------------------------------------
 
+def sample_task(task_id: str, seed: Optional[int] = None) -> dict:
+    """
+    Sample one random invoice from the appropriate difficulty pool.
+
+    Args:
+        task_id : "task_easy" | "task_medium" | "task_hard" | "task_expert"
+        seed    : optional random seed for reproducibility
+
+    Returns:
+        A complete task dict combining pool config + sampled invoice
+    """
+    if task_id not in DIFFICULTY_POOLS:
+        raise KeyError(f"Unknown task_id: {task_id!r}. Valid: {TASK_ORDER}")
+
+    pool_config = DIFFICULTY_POOLS[task_id]
+    db = get_db()
+
+    # Filter invoices matching this pool's categories
+    candidates = [
+        inv for inv in db
+        if inv["category"] in pool_config["categories"]
+    ]
+
+    if not candidates:
+        raise RuntimeError(f"No invoices found for task_id={task_id!r}")
+
+    if seed is not None:
+        random.seed(seed)
+
+    chosen = random.choice(candidates)
+
+    return {
+        "task_id":      task_id,
+        "difficulty":   pool_config["difficulty"],
+        "description":  pool_config["description"],
+        "max_steps":    pool_config["max_steps"],
+        "hint_enabled": pool_config["hint_enabled"],
+
+        # From the sampled invoice
+        "invoice_id":      chosen["invoice_id"],
+        "invoice_text":    chosen["invoice_text"],
+        "vendor_pan":      chosen["vendor_pan"],
+        "cumulative_ytd":  chosen["cumulative_ytd"],
+        "category":        chosen["category"],
+        "task_hint":       chosen["task_hint"],
+        "ground_truth":    chosen["ground_truth"],
+
+        # Reward breakpoints vary by difficulty
+        "reward_breakpoints": _build_breakpoints(pool_config["difficulty"], chosen),
+    }
+
+
+def _build_breakpoints(difficulty: str, invoice: dict) -> dict:
+    """
+    Build reward breakpoints for a sampled invoice.
+    Weights vary by difficulty — harder tasks reward PAN check more.
+    """
+    gt = invoice["ground_truth"]
+    is_inop_pan  = not gt["pan_valid"]
+    is_mixed     = gt.get("goods_amount", 0) > 0
+    is_bundled   = invoice["category"] == "gst_bundled_tds_base"
+    is_threshold = invoice["category"] in ("threshold_boundary", "below_threshold_new_limits", "below_threshold")
+    is_split     = gt["section"] in ("SPLIT", "SPLIT_194J_194I")
+
+    bp = {}
+
+    # PAN check reward — always present
+    if difficulty in ("hard", "expert") and is_inop_pan:
+        bp["pan_checked"]             = 0.20   # worth more — it's the key insight
+        bp["pan_inoperative_flagged"] = 0.20   # extra credit for explicitly flagging
+    else:
+        bp["pan_checked"] = 0.10
+
+    # Section identification
+    if not is_inop_pan and not is_split:
+        bp["section_correct"] = 0.25 if difficulty in ("easy", "medium") else 0.15
+
+    # Goods exclusion (mixed invoices)
+    if is_mixed or is_split:
+        bp["goods_excluded"] = 0.20
+
+    # Threshold check
+    if is_threshold:
+        bp["threshold_checked"] = 0.15
+
+    # GST base
+    if is_bundled:
+        bp["gst_base_correct"] = 0.15
+
+    # Final amount — always the highest-value breakpoint
+    bp["amount_exact"] = 0.40 if not is_inop_pan else 0.30
+
+    # Normalise to sum to 1.0
+    total = sum(bp.values())
+    if total > 0:
+        bp = {k: round(v / total, 4) for k, v in bp.items()}
+
+    return bp
+
+
+# ---------------------------------------------------------------------------
+# Convenience helpers
+# ---------------------------------------------------------------------------
 
 def all_task_ids() -> list:
     return TASK_ORDER.copy()
+
+
+def get_task(task_id: str, seed: Optional[int] = None) -> dict:
+    """Alias for sample_task — matches old interface."""
+    return sample_task(task_id, seed=seed)
+
+
+def pool_size(task_id: str) -> int:
+    """Return how many invoices are available for a given task."""
+    config = DIFFICULTY_POOLS.get(task_id, {})
+    db = get_db()
+    return sum(1 for inv in db if inv["category"] in config.get("categories", []))
