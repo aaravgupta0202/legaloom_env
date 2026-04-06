@@ -512,12 +512,22 @@ def classify_service(description: str, vendor_is_company: bool = True) -> dict:
         ("194T", ["partner salary", "partner remuneration",
                   "partner commission", "interest on capital partner"], False),
 
+        # 194Q — Goods purchase (check BEFORE 194C/194J — very specific keywords)
+        ("194Q", ["procurement", "raw material", "raw materials",
+                  "steel", "metal", "aluminium", "copper",
+                  "packaging material", "electronic components",
+                  "goods purchase", "bulk purchase", "bulk order",
+                  "inventory purchase", "merchandise purchase",
+                  "industrial equipment purchase", "machine purchase"], False),
+
         # 194C — Contractors (before 194J to avoid confusion)
         ("194C", ["catering", "housekeeping", "facility management",
                   "security services", "security guard", "manpower supply",
-                  "labour supply", "event management", "event organiser",
+                  "labour supply", "labour contract", "labor contract",
+                  "event management", "event organiser",
                   "transportation services", "courier", "printing",
-                  "advertising production", "construction"], False),
+                  "advertising production", "construction",
+                  "contract staffing", "manpower"], False),
 
         # 194J Technical — company vendors (2%)
         ("194J_TECHNICAL", ["it support", "technical support", "cloud",
