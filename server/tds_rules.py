@@ -499,18 +499,30 @@ def classify_service(description: str, vendor_is_company: bool = True) -> dict:
     classification_rules = [
         # 194I — Rent (check first, very distinct)
         ("194I", ["rent", "lease", "office space", "warehouse rent",
-                  "co-working", "co working", "server rack",
+                  "co-working", "co working", "coworking",
+                  "virtual office", "meeting room", "conference room",
+                  "serviced office", "office premises",
+                  "server rack", "colocation", "data centre space",
                   "equipment rental", "machinery hire", "vehicle hire",
-                  "cold storage rent", "godown rent"], False),
+                  "cold storage rent", "godown rent",
+                  "warehouse lease", "property lease"], False),
 
-        # 194H — Commission (distinct keywords)
+        # 194T — Partner payments (NEW FY 2025-26) — BEFORE 194H
+        # "partner commission" must not trigger 194H's "commission" keyword
+        ("194T", ["partner salary", "partner remuneration",
+                  "partner commission", "interest on capital partner",
+                  "partner bonus", "partner sitting fees",
+                  "partner drawings", "sitting fees",
+                  "interest on partner capital", "remuneration to partner",
+                  "partner capital", "capital contribution",
+                  "interest on capital contribution",
+                  "partner interest on capital",
+                  "interest on capital"], False),
+
+        # 194H — Commission (third-party agents only)
         ("194H", ["commission", "brokerage", "referral fee",
                   "agency fee", "dealer margin", "channel partner fee",
                   "distribution commission", "franchise fee"], False),
-
-        # 194T — Partner payments (very specific)
-        ("194T", ["partner salary", "partner remuneration",
-                  "partner commission", "interest on capital partner"], False),
 
         # 194Q — Goods purchase (check BEFORE 194C/194J — very specific keywords)
         ("194Q", ["procurement", "raw material", "raw materials",
@@ -524,10 +536,14 @@ def classify_service(description: str, vendor_is_company: bool = True) -> dict:
         ("194C", ["catering", "housekeeping", "facility management",
                   "security services", "security guard", "manpower supply",
                   "labour supply", "labour contract", "labor contract",
-                  "event management", "event organiser",
+                  "event management", "event organiser", "event coordination",
+                  "event coordinator", "product launch event",
+                  "launch event", "awards ceremony",
+                  "waste management", "waste disposal", "sanitation services",
+                  "cleaning services", "pest control",
                   "transportation services", "courier", "printing",
                   "advertising production",
-                  "construction work", "construction contract",  # NOT 'construction' alone
+                  "construction work", "construction contract",
                   "contract staffing", "manpower"], False),
 
         # 194J Professional — individual/LLP (10%) — check BEFORE technical

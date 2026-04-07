@@ -1,16 +1,17 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-#
-# This source code is licensed under the BSD-style license found in the
-# LICENSE file in the root directory of this source tree.
-
-"""Legaloom Env Environment."""
+"""LegaLoom-Env — TDS Compliance Environment."""
 
 from .client import LegaloomEnv
-from .models import LegaloomAction, LegaloomObservation
+from .models import TDSAction, TDSObservation, TDSState
+
+# Aliases for backward compatibility
+LegaloomAction = TDSAction
+LegaloomObservation = TDSObservation
 
 __all__ = [
+    "LegaloomEnv",
+    "TDSAction",
+    "TDSObservation",
+    "TDSState",
     "LegaloomAction",
     "LegaloomObservation",
-    "LegaloomEnv",
 ]

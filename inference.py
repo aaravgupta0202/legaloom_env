@@ -11,6 +11,8 @@ Stdout format (strictly enforced by hackathon spec):
     [START] task=<task_id> env=legaloom_env model=<model>
     [STEP]  step=<n> action=<str> reward=<0.00> done=<true|false> error=<msg|null>
     [END]   success=<true|false> steps=<n> rewards=<r1,r2,...,rn>
+
+Note: score is computed and printed to stderr only — not stdout.
 """
 
 import json
@@ -60,10 +62,14 @@ def log_step(step: int, action: str, reward: float,
 
 def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
     rewards_str = ",".join(f"{r:.2f}" for r in rewards)
+    # Spec format: exactly [END] success= steps= rewards= (no score= on stdout)
+    success_val = "true" if success else "false"
     print(
-        f"[END] success={str(success).lower()} steps={steps} score={score:.3f} rewards={rewards_str}",
+        f"[END] success={success_val} steps={steps} rewards={rewards_str}",
         flush=True,
     )
+    # Score logged to stderr so it doesn't interfere with the parser
+    print(f"[SCORE] {score:.3f}", file=sys.stderr, flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -271,7 +277,7 @@ def run_episode(client: OpenAI, env, task_id: str) -> dict:
                 ))
                 if hasattr(result, "observation"):
                     obs    = result.observation.__dict__ if hasattr(result.observation, "__dict__") else {}
-                    reward = float(result.reward or 0.0)
+                    reward = float(result.reward) if result.reward is not None else 0.0
                     done   = result.done
                 else:
                     obs    = result.__dict__ if hasattr(result, "__dict__") else {}
@@ -319,27 +325,36 @@ def run_episode(client: OpenAI, env, task_id: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
-
-    from server.tasks import all_task_ids
-    from server.legaloom_env_environment import LegaloomEnvironment
-
-    task_ids = all_task_ids()   # task_easy, task_medium, task_hard, task_expert
+    client   = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    task_ids = ["task_easy", "task_medium", "task_hard", "task_expert"]
     results  = []
 
-    for task_id in task_ids:
+    if LOCAL_IMAGE_NAME:
+        # Docker mode — connect to a running containerised environment
+        # Start: docker run -p 7860:7860 <LOCAL_IMAGE_NAME>
+        print(f"[INFO] Docker mode: {LOCAL_IMAGE_NAME}", file=sys.stderr)
+        from client import LegaloomEnv
+        env_url = os.getenv("ENV_BASE_URL", "http://localhost:7860")
+        for task_id in task_ids:
+            with LegaloomEnv(base_url=env_url).sync() as env:
+                result = run_episode(client, env, task_id)
+                results.append(result)
+    else:
+        # In-process mode (default) — no Docker required for baseline run
+        from server.legaloom_env_environment import LegaloomEnvironment
 
-        env = LegaloomEnvironment()
+        for task_id in task_ids:
+            env = LegaloomEnvironment()
 
-        class LocalEnvWrapper:
-            def __init__(self, e): self._env = e
-            def reset(self, task_id="task_easy", **kw):
-                return self._env.reset(task_id=task_id)
-            def step(self, action):
-                return self._env.step(action)
+            class LocalEnvWrapper:
+                def __init__(self, e): self._env = e
+                def reset(self, task_id="task_easy", **kw):
+                    return self._env.reset(task_id=task_id)
+                def step(self, action):
+                    return self._env.step(action)
 
-        result = run_episode(client, LocalEnvWrapper(env), task_id)
-        results.append(result)
+            result = run_episode(client, LocalEnvWrapper(env), task_id)
+            results.append(result)
 
     # Summary to stderr — keeps stdout log clean for parser
     print("\n[SUMMARY]", file=sys.stderr)

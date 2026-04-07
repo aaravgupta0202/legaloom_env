@@ -26,11 +26,13 @@ try:
                              TDS_SECTIONS, section_summary, classify_service)
     from .pan_registry import is_pan_valid, is_company, pan_status_message
     from .tasks import get_task, all_task_ids, sample_task
+    from .graders import grade_submission, GRADERS
 except ImportError:
     from server.tds_rules import (get_rate, threshold_crossed, compute_tds,
                                    TDS_SECTIONS, section_summary, classify_service)
     from server.pan_registry import is_pan_valid, is_company, pan_status_message
     from server.tasks import get_task, all_task_ids, sample_task
+    from server.graders import grade_submission, GRADERS
 
 
 AMOUNT_TOLERANCE_INR = 1.0
@@ -58,13 +60,16 @@ class LegaloomEnvironment(Environment):
         if task_id not in all_task_ids():
             task_id = "task_easy"
 
-        self._task          = sample_task(task_id, seed=seed)
+        self._task            = sample_task(task_id, seed=seed)
         self._current_task_id = task_id
-        self._invoice_read  = False
-        self._ytd_queried   = False
-        self._law_queried   = False
-        self._reward_earned = {k: False for k in self._task["reward_breakpoints"]}
-        self._episode_reward= 0.0
+        # Reset ALL episode flags — no state leakage between episodes
+        self._invoice_read    = False
+        self._ytd_queried     = False
+        self._law_queried     = False
+        self._pan_checked_pan = None   # tracks which PAN was checked
+        self._section_found   = None   # tracks which section was identified
+        self._reward_earned   = {k: False for k in self._task["reward_breakpoints"]}
+        self._episode_reward  = 0.0
 
         self._state = TDSState(
             episode_id=str(uuid4()),
@@ -98,47 +103,61 @@ class LegaloomEnvironment(Environment):
     # ------------------------------------------------------------------
 
     def step(self, action: TDSAction, **kwargs) -> TDSObservation:
-        if self._task is None:
-            self.reset(task_id=self._current_task_id)
+        try:
+            if self._task is None:
+                self.reset(task_id=self._current_task_id)
 
-        self._state.step_count += 1
-        steps_used = self._state.step_count
-        max_steps  = self._task["max_steps"]
+            self._state.step_count += 1
+            steps_used = self._state.step_count
+            max_steps  = self._task["max_steps"]
 
-        if steps_used > max_steps:
-            return self._force_close(steps_used, max_steps)
+            # Enforce max_steps inside env — not just in inference.py
+            if steps_used > max_steps:
+                return self._force_close(steps_used, max_steps)
 
-        action_type = (action.action_type or "").strip().lower()
-        params      = action.parameters or {}
+            action_type = (action.action_type or "").strip().lower()
+            params      = action.parameters or {}
 
-        handlers = {
-            "read_invoice":    self._handle_read_invoice,
-            "check_pan":       self._handle_check_pan,
-            "check_threshold": self._handle_check_threshold,
-            "query_ytd":       self._handle_query_ytd,
-            "lookup_section":  self._handle_lookup_section,
-            "query_law":       self._handle_query_law,
-            "submit_answer":   self._handle_submit_answer,
-        }
+            handlers = {
+                "read_invoice":    self._handle_read_invoice,
+                "check_pan":       self._handle_check_pan,
+                "check_threshold": self._handle_check_threshold,
+                "query_ytd":       self._handle_query_ytd,
+                "lookup_section":  self._handle_lookup_section,
+                "query_law":       self._handle_query_law,
+                "submit_answer":   self._handle_submit_answer,
+            }
 
-        handler = handlers.get(action_type)
-        if handler:
-            if action_type == "submit_answer":
-                return handler(params, steps_used)
-            return handler(params, steps_used, max_steps)
+            handler = handlers.get(action_type)
+            if handler:
+                if action_type == "submit_answer":
+                    return handler(params, steps_used)
+                return handler(params, steps_used, max_steps)
 
-        return TDSObservation(
-            done=False, reward=-0.05,
-            invoice_text=self._invoice_text(),
-            action_result=(
-                f"Unknown action_type: '{action_type}'. "
-                "Valid: read_invoice, check_pan, check_threshold, "
-                "query_ytd, lookup_section, query_law, submit_answer."
-            ),
-            available_actions=self._available_actions(),
-            steps_used=steps_used, max_steps=max_steps,
-            hint=self._build_hint(),
-        )
+            # Unknown action — penalise
+            return TDSObservation(
+                done=False, reward=-0.05,
+                invoice_text=self._invoice_text(),
+                action_result=(
+                    f"Unknown action_type: '{action_type}'. "
+                    "Valid: read_invoice, check_pan, check_threshold, "
+                    "query_ytd, lookup_section, query_law, submit_answer."
+                ),
+                available_actions=self._available_actions(),
+                steps_used=steps_used, max_steps=max_steps,
+                hint=self._build_hint(),
+            )
+        except Exception as exc:
+            # Catch all exceptions — return safe error observation, never crash
+            return TDSObservation(
+                done=False, reward=0.0,
+                invoice_text=self._invoice_text() if self._task else "",
+                action_result=f"Environment error: {exc}. Please retry your action.",
+                available_actions=self._available_actions() if self._task else ["read_invoice"],
+                steps_used=getattr(self._state, "step_count", 0),
+                max_steps=self._task["max_steps"] if self._task else 8,
+                hint="",
+            )
 
     # ------------------------------------------------------------------
     # Action handlers
@@ -173,7 +192,10 @@ class LegaloomEnvironment(Environment):
         self._state.pan_checked = True
 
         # Use our PAN registry if available, else check against ground truth
-        from server.pan_registry import PAN_DB
+        try:
+            from server.pan_registry import PAN_DB
+        except ImportError:
+            from pan_registry import PAN_DB
         record = PAN_DB.get(pan)
         if record:
             result = pan_status_message(pan)
@@ -298,10 +320,16 @@ class LegaloomEnvironment(Environment):
             f"Confidence: {result_dict.get('confidence', 'medium')}."
         )
 
-        # Award if correct section matched
+        # Award if correct section matched, OR if TDS not applicable
+        # (section doesn't matter when amount is below threshold)
         reward = 0.0
         expected_section = gt["section"]
-        if matched_section == expected_section and expected_section not in ("SPLIT", "SPLIT_194J_194I"):
+        tds_applicable = gt.get("tds_applicable", True)
+        section_match = (
+            matched_section == expected_section and
+            expected_section not in ("SPLIT", "SPLIT_194J_194I")
+        )
+        if section_match or not tds_applicable:
             reward = self._award("section_correct")
             self._state.section_identified = True
 
@@ -358,64 +386,22 @@ class LegaloomEnvironment(Environment):
 
     def _handle_submit_answer(self, params, steps_used) -> TDSObservation:
         self._state.answer_submitted = True
-        gt     = self._task["ground_truth"]
+        gt = self._task["ground_truth"]
+
+        # Use explicit grader — deterministic, separated from env logic
+        grader_result = grade_submission(params, gt)
+        fb     = grader_result["feedback"]
         reward = 0.0
-        fb     = []
 
-        submitted_amount  = float(params.get("tds_amount_inr", -1))
-        submitted_section = str(params.get("section", "")).strip().upper()
-        submitted_rate    = float(params.get("rate_percent", -1))
-
-        # --- PAN inoperative check ---
-        if not gt["pan_valid"]:
-            if submitted_rate == 20.0 or str(params.get("pan_status","")).lower() == "inoperative":
-                reward += self._award("pan_inoperative_flagged")
-                fb.append("✓ Correctly identified inoperative PAN — 20% override applied.")
-            else:
-                fb.append(f"✗ PAN was INOPERATIVE. Should apply 20% (Section 206AA), not {submitted_rate}%.")
-
-        # --- No TDS case ---
-        if not gt["tds_applicable"]:
-            if submitted_amount == 0.0 or str(params.get("no_tds","")).lower() == "true":
-                reward += self._award("amount_exact")
-                fb.append("✓ Correctly identified no TDS applicable — below threshold.")
-            else:
-                fb.append(f"✗ No TDS should be deducted (below threshold). Submitted INR {submitted_amount:,.2f}.")
-            return self._end_episode(reward, fb, steps_used)
-
-        # --- Rate check ---
-        if abs(submitted_rate - gt["tds_rate_percent"]) < 0.01:
-            reward += self._award("rate_correct") if "rate_correct" in self._task["reward_breakpoints"] else 0.0
-            fb.append(f"✓ Rate {submitted_rate}% is correct.")
-        else:
-            fb.append(f"✗ Rate incorrect: submitted {submitted_rate}%, correct is {gt['tds_rate_percent']}%.")
-
-        # --- Goods exclusion check ---
-        goods = gt.get("goods_amount", 0.0)
-        if goods > 0:
-            if submitted_amount <= gt["taxable_amount"] + AMOUNT_TOLERANCE_INR:
-                reward += self._award("goods_excluded")
-                fb.append(f"✓ Correctly excluded goods (INR {goods:,.0f}) from TDS base.")
-            else:
-                fb.append(f"✗ Goods (INR {goods:,.0f}) should be excluded from TDS. TDS on services only.")
-
-        # --- GST base check ---
-        if self._task["category"] == "gst_bundled_tds_base":
-            # Correct answer uses full (bundled) amount
-            if abs(submitted_amount - gt["tds_amount_inr"]) <= AMOUNT_TOLERANCE_INR:
-                reward += self._award("gst_base_correct")
-                fb.append("✓ Correctly applied TDS on full (GST-inclusive) invoice amount.")
-
-        # --- Final amount ---
-        correct = abs(submitted_amount - gt["tds_amount_inr"]) <= AMOUNT_TOLERANCE_INR
-        if correct:
+        # Map grader score to reward breakpoints so partial rewards still flow
+        if grader_result["breakdown"].get("no_tds_correct") or            grader_result["breakdown"].get("amount_correct"):
             reward += self._award("amount_exact")
-            fb.append(f"✓ TDS amount INR {submitted_amount:,.2f} is CORRECT.")
-        else:
-            fb.append(
-                f"✗ TDS amount incorrect: submitted INR {submitted_amount:,.2f}, "
-                f"correct is INR {gt['tds_amount_inr']:,.2f}."
-            )
+        if grader_result["breakdown"].get("pan_inoperative_detected"):
+            reward += self._award("pan_inoperative_flagged")
+        if grader_result["breakdown"].get("goods_excluded"):
+            reward += self._award("goods_excluded")
+        if grader_result["breakdown"].get("gst_base_correct"):
+            reward += self._award("gst_base_correct")
 
         return self._end_episode(reward, fb, steps_used)
 
@@ -424,13 +410,13 @@ class LegaloomEnvironment(Environment):
     # ------------------------------------------------------------------
 
     def _end_episode(self, reward, feedback_parts, steps_used) -> TDSObservation:
-        total_score = min(self._episode_reward, 1.0)
+        total_score = min(max(self._episode_reward, 0.0), 1.0)
         result = (
             f"Episode complete. {' | '.join(feedback_parts)} "
             f"Final score: {total_score:.3f}."
         )
         return TDSObservation(
-            done=True, reward=reward,
+            done=True, reward=float(reward),  # always float, never None
             invoice_text=self._task["invoice_text"],
             action_result=result,
             available_actions=[],
@@ -440,11 +426,13 @@ class LegaloomEnvironment(Environment):
         )
 
     def _award(self, key: str) -> float:
+        """Award reward for a breakpoint exactly once per episode."""
+        # If key not in reward_earned dict, treat as already awarded (safe default)
         if self._reward_earned.get(key, True):
             return 0.0
-        reward = self._task["reward_breakpoints"].get(key, 0.0)
+        reward = float(self._task["reward_breakpoints"].get(key, 0.0))
         self._reward_earned[key] = True
-        self._episode_reward += reward
+        self._episode_reward = min(self._episode_reward + reward, 1.0)
         return reward
 
     def _invoice_text(self) -> str:
@@ -497,3 +485,9 @@ class LegaloomEnvironment(Environment):
     @property
     def state(self) -> TDSState:
         return self._state
+
+
+# ---------------------------------------------------------------------------
+# Explicit grader functions — exposed for external evaluation
+# Scores are always in [0.0, 1.0] and deterministic given same state
+# ---------------------------------------------------------------------------

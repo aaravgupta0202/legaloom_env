@@ -8,19 +8,19 @@ from typing import Optional
 
 PAN_DB = {
     # ── Inoperative PANs (not linked to Aadhaar) ────────────────────────────
-    "ZZZZZ9999Z": {"name": "CloudMatrix Infrastructure Pvt Ltd", "status": "inoperative", "pan_type": "company"},
-    "AAAAA1111A": {"name": "Alpha Tech Services Pvt Ltd",        "status": "inoperative", "pan_type": "company"},
-    "BBBBB2222B": {"name": "Beta Consulting LLP",                "status": "inoperative", "pan_type": "llp"},
-    "CCCCC3333C": {"name": "Gamma Security Pvt Ltd",             "status": "inoperative", "pan_type": "company"},
+    "AAXCC1234Z": {"name": "CloudMatrix Infrastructure Pvt Ltd", "status": "inoperative", "pan_type": "company"},
+    "AAXCC5678A": {"name": "Alpha Tech Services Pvt Ltd",        "status": "inoperative", "pan_type": "company"},
+    "AAXFF9012B": {"name": "Beta Consulting LLP",                "status": "inoperative", "pan_type": "llp"},
+    "AAXCC3456C": {"name": "Gamma Security Pvt Ltd",             "status": "inoperative", "pan_type": "company"},
 
     # ── Professional services ─────────────────────────────────────────────────
-    "ABCDS1234F": {"name": "Sharma & Associates LLP",            "status": "operative",   "pan_type": "llp"},
-    "ABCCK5678G": {"name": "Kapoor & Mehta Chartered Accountants","status": "operative",  "pan_type": "firm"},
+    "AADFS1234F": {"name": "Sharma & Associates LLP",            "status": "operative",   "pan_type": "llp"},
+    "AAFFK5678G": {"name": "Kapoor & Mehta Chartered Accountants","status": "operative",  "pan_type": "firm"},
     "ABCPG2345H": {"name": "Priya Gupta & Co (CS)",              "status": "operative",   "pan_type": "individual"},
-    "ABCVA3456J": {"name": "Verma Architects LLP",               "status": "operative",   "pan_type": "llp"},
-    "ABCDM4567K": {"name": "Dr Suresh Mehta (Physician)",        "status": "operative",   "pan_type": "individual"},
-    "ABCJT5678L": {"name": "Joshi Tax Consultants LLP",          "status": "operative",   "pan_type": "llp"},
-    "ABCII6789M": {"name": "Iyer Interior Design Studio",        "status": "operative",   "pan_type": "individual"},
+    "AAFFV3456J": {"name": "Verma Architects LLP",               "status": "operative",   "pan_type": "llp"},
+    "AADPM4567K": {"name": "Dr Suresh Mehta (Physician)",        "status": "operative",   "pan_type": "individual"},
+    "AAFFT5678L": {"name": "Joshi Tax Consultants LLP",          "status": "operative",   "pan_type": "llp"},
+    "AABPI6789M": {"name": "Iyer Interior Design Studio",        "status": "operative",   "pan_type": "individual"},
 
     # ── Technical services / IT companies ────────────────────────────────────
     "AABCT1234C": {"name": "TechServ Solutions Pvt Ltd",         "status": "operative",   "pan_type": "company"},
@@ -32,25 +32,25 @@ PAN_DB = {
     "AABCP7890J": {"name": "CloudPeak Services Pvt Ltd",         "status": "operative",   "pan_type": "company"},
 
     # ── Contractors ───────────────────────────────────────────────────────────
-    "PQRST1122A": {"name": "QuickCater Services",                "status": "operative",   "pan_type": "company"},
+    "AAQCS1122A": {"name": "QuickCater Services",                "status": "operative",   "pan_type": "company"},
     "AABCG1234B": {"name": "Guardian Security Solutions Pvt Ltd","status": "operative",   "pan_type": "company"},
-    "PQRSC2345B": {"name": "CleanPro Facility Management",       "status": "operative",   "pan_type": "company"},
+    "AAQCC2345B": {"name": "CleanPro Facility Management",       "status": "operative",   "pan_type": "company"},
     "AABCE3456C": {"name": "EventCraft Pvt Ltd",                 "status": "operative",   "pan_type": "company"},
-    "PQRSP4567C": {"name": "PrintWell Enterprises",              "status": "operative",   "pan_type": "firm"},
+    "AAQFP4567C": {"name": "PrintWell Enterprises",              "status": "operative",   "pan_type": "firm"},
     "AABCM5678D": {"name": "Manpower Solutions India Pvt Ltd",   "status": "operative",   "pan_type": "company"},
 
     # ── Rent / property ───────────────────────────────────────────────────────
     "AABCP8901E": {"name": "Prestige Commercial Properties",     "status": "operative",   "pan_type": "company"},
-    "ABCAK9012F": {"name": "Anand Kumar Sharma",                 "status": "operative",   "pan_type": "individual"},
+    "AADPA9012F": {"name": "Anand Kumar Sharma",                 "status": "operative",   "pan_type": "individual"},
     "AABCC0123G": {"name": "ColoSpace Technologies Pvt Ltd",     "status": "operative",   "pan_type": "company"},
     "AABCE1234H": {"name": "EquipHire Solutions Pvt Ltd",        "status": "operative",   "pan_type": "company"},
 
     # ── Commission / brokerage ────────────────────────────────────────────────
-    "PQRSS2345H": {"name": "SalesForce Agents",                  "status": "operative",   "pan_type": "firm"},
-    "PQRSR3456J": {"name": "ReferralNet Associates",             "status": "operative",   "pan_type": "firm"},
+    "AAQFS2345H": {"name": "SalesForce Agents",                  "status": "operative",   "pan_type": "firm"},
+    "AAQFR3456J": {"name": "ReferralNet Associates",             "status": "operative",   "pan_type": "firm"},
 
     # ── 194T partner / 194Q goods ─────────────────────────────────────────────
-    "AABCM6789E": {"name": "Mehta & Sons Trading Co (Partnership)","status": "operative", "pan_type": "firm"},
+    "AAFFM6789E": {"name": "Mehta & Sons Trading Co (Partnership)","status": "operative", "pan_type": "firm"},
     "AABCI7890F": {"name": "Industrial Steel Suppliers Pvt Ltd", "status": "operative",   "pan_type": "company"},
 }
 

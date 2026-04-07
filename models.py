@@ -58,7 +58,15 @@ class TDSObservation(Observation):
     Inherits from Observation which already provides:
       done   : bool
       reward : Optional[float]
+
+    We override reward to always be float (never None) for spec compliance.
     """
+
+    # Override reward to always be float — spec requires numeric reward
+    reward: float = Field(
+        default=0.0,
+        description="Reward for this step. Always a float (0.0 when no reward).",
+    )
 
     # The invoice text — populated on first read_invoice action
     invoice_text: str = Field(
