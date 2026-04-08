@@ -55,13 +55,13 @@ def log_step(step: int, action: str, reward: float,
     action_clean = action.replace("\n", " ").replace("\r", "")[:200]
     print(
         f"[STEP] step={step} action={action_clean} "
-        f"reward={reward:.2f} done={done_val} error={error_val}",
+        f"reward={reward:.3f} done={done_val} error={error_val}",
         flush=True,
     )
 
 
 def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
-    rewards_str = ",".join(f"{r:.2f}" for r in rewards)
+    rewards_str = ",".join(f"{r:.3f}" for r in rewards)
     success_val = "true" if success else "false"
     # Spec format: [END] success= steps= rewards= (score emitted to stderr only)
     print(
@@ -295,7 +295,7 @@ def run_episode(client: OpenAI, env, task_id: str) -> dict:
                      reward=reward, done=done, error=error)
 
             history.append(
-                f"Step {step}: {action_str} -> reward={reward:+.2f} | "
+                f"Step {step}: {action_str} -> reward={reward:+.3f} | "
                 f"{obs.get('action_result', '')[:120]}"
             )
 
