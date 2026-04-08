@@ -277,15 +277,15 @@ def run_episode(client: OpenAI, env, task_id: str) -> dict:
                 ))
                 if hasattr(result, "observation"):
                     obs    = result.observation.__dict__ if hasattr(result.observation, "__dict__") else {}
-                    reward = float(result.reward) if result.reward is not None else 0.0
+                    reward = float(result.reward) if result.reward is not None else 0.001
                     done   = result.done
                 else:
                     obs    = result.__dict__ if hasattr(result, "__dict__") else {}
-                    reward = float(getattr(result, "reward", 0.0) or 0.0)
+                    reward = float(getattr(result, "reward", 0.001) or 0.001)
                     done   = getattr(result, "done", False)
 
             except Exception as e:
-                reward = 0.0
+                reward = 0.001  # floor: exception path must not emit 0.0
                 done   = False
                 error  = str(e)[:120]
 

@@ -447,7 +447,7 @@ class LegaloomEnvironment(Environment):
         # True = already awarded (or not yet registered) — both cases return 0.0
         if self._reward_earned.get(key, True):
             return 0.001  # strictly > 0 — hackathon requires no 0.0 rewards
-        reward = float(self._task["reward_breakpoints"].get(key, 0.0))
+        reward = float(self._task["reward_breakpoints"].get(key, 0.001))
         self._reward_earned[key] = True
         self._episode_reward = min(self._episode_reward + reward, 0.999)  # strictly (0,1) exclusive
         return reward
