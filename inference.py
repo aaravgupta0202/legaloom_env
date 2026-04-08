@@ -69,21 +69,15 @@ def log_step(step: int, action: str, reward: float,
 
 
 def log_end(success: bool, steps: int, score1: float, rewards: List[float]) -> None:
-    # Clamp all individual rewards — evaluator checks each one
-    safe_rewards = [_clamp(r) for r in rewards]
+    safe_rewards = [_clamp(r) for r in rewards] if rewards else [_clamp(score1)]  # never empty
     rewards_str  = ",".join(f"{r:.2f}" for r in safe_rewards)
     success_val  = "true" if success else "false"
-    # Clamp the overall score too
     safe_score   = _clamp(score1)
     print(
-        f"[END] success={success_val} steps={steps} rewards={rewards_str}",
+        f"[END] success={success_val} steps={steps} score={safe_score:.2f} rewards={rewards_str}",
         flush=True,
     )
-    if (score1>=0.5):
-        score=1
-    else:
-        score=0
-    print(f"[SCORE] {score:.3f}", file=sys.stderr, flush=True)
+    print(f"[SCORE] {safe_score:.2f}", file=sys.stderr, flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -382,11 +376,7 @@ def main() -> None:
             file=sys.stderr,
         )
     avg = sum(r["score"] for r in results) / len(results)
-    if (avg>=0.5):
-        final_output=1
-    else:
-        final_output=0
-    print(f"  Average score: {final_output}", file=sys.stderr)
+    print(f"  Average score: {avg:.2f}", file=sys.stderr)
 
 
 if __name__ == "__main__":
