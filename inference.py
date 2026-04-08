@@ -68,18 +68,22 @@ def log_step(step: int, action: str, reward: float,
     )
 
 
-def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
+def log_end(success: bool, steps: int, score1: float, rewards: List[float]) -> None:
     # Clamp all individual rewards — evaluator checks each one
     safe_rewards = [_clamp(r) for r in rewards]
     rewards_str  = ",".join(f"{r:.2f}" for r in safe_rewards)
     success_val  = "true" if success else "false"
     # Clamp the overall score too
-    safe_score   = _clamp(score)
+    safe_score   = _clamp(score1)
     print(
         f"[END] success={success_val} steps={steps} rewards={rewards_str}",
         flush=True,
     )
-    print(f"[SCORE] {safe_score:.3f}", file=sys.stderr, flush=True)
+    if (score1>=0.5):
+        score=1
+    else:
+        score=0
+    print(f"[SCORE] {score:.3f}", file=sys.stderr, flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -326,7 +330,7 @@ def run_episode(client: OpenAI, env, task_id: str) -> dict:
         score = _R_MIN
 
     finally:
-        log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
+        log_end(success=success, steps=steps_taken, score1=score, rewards=rewards)
 
     return {
         "task_id": task_id,
