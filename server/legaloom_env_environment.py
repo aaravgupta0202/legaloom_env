@@ -1,14 +1,11 @@
 """
-LegaLoom-Env — TDS Compliance Environment (Upgraded)
+LegaLoom-Env — TDS Compliance Environment
 
-Upgraded features vs v1:
-  - 260-invoice database (random sampling per episode)
-  - 4 difficulty levels (easy / medium / hard / expert)
-  - New actions: check_threshold, query_ytd, query_law
-  - GST base logic (TDS on pre-GST or gross depending on invoice)
-  - Goods exclusion tracking
-  - All FY 2025-26 rules (194T, updated thresholds)
-  - Reward shaped across every reasoning step
+Simulates Indian Tax Deducted at Source (TDS) compliance back-office tasks.
+Agent reads vendor invoices and computes the correct TDS deduction.
+
+Reward contract: every reward value is STRICTLY in (0.0, 1.0) exclusive.
+The hackathon validator rejects exactly 0.0 and exactly 1.0.
 """
 
 from uuid import uuid4
@@ -34,8 +31,16 @@ except ImportError:
     from server.tasks import get_task, all_task_ids, sample_task
     from server.graders import grade_submission, GRADERS
 
-
 AMOUNT_TOLERANCE_INR = 1.0
+
+# Reward bounds — strictly open interval required by hackathon
+_R_MIN = 0.05
+_R_MAX = 0.95
+
+
+def _r(v: float) -> float:
+    """Clamp a reward to strictly open (0.0, 1.0)."""
+    return round(min(max(float(v), _R_MIN), _R_MAX), 4)
 
 
 class LegaloomEnvironment(Environment):
@@ -43,14 +48,13 @@ class LegaloomEnvironment(Environment):
     SUPPORTS_CONCURRENT_SESSIONS: bool = True
 
     def __init__(self):
-        self._state         = TDSState()
-        self._task          = None
-        self._invoice_read  = False
-        self._ytd_queried   = False
-        self._law_queried   = False
-        # Initialize reward_earned so _award() never accidentally pays before reset()
-        self._reward_earned = {}   # reset() populates keys; get(key,True) = already-earned safe default
-        self._episode_reward= 0.0
+        self._state           = TDSState()
+        self._task            = None
+        self._invoice_read    = False
+        self._ytd_queried     = False
+        self._law_queried     = False
+        self._reward_earned   = {}
+        self._episode_reward  = _R_MIN
         self._current_task_id = "task_easy"
         self._pan_checked_pan = None
         self._section_found   = None
@@ -65,14 +69,13 @@ class LegaloomEnvironment(Environment):
 
         self._task            = sample_task(task_id, seed=seed)
         self._current_task_id = task_id
-        # Reset ALL episode flags — no state leakage between episodes
         self._invoice_read    = False
         self._ytd_queried     = False
         self._law_queried     = False
-        self._pan_checked_pan = None   # tracks which PAN was checked
-        self._section_found   = None   # tracks which section was identified
+        self._pan_checked_pan = None
+        self._section_found   = None
         self._reward_earned   = {k: False for k in self._task["reward_breakpoints"]}
-        self._episode_reward  = 0.0
+        self._episode_reward  = _R_MIN   # start just above 0.0
 
         self._state = TDSState(
             episode_id=str(uuid4()),
@@ -86,7 +89,7 @@ class LegaloomEnvironment(Environment):
 
         return TDSObservation(
             done=False,
-            reward=0.001,
+            reward=_R_MIN,
             invoice_text="",
             action_result=(
                 f"New episode started. Task: {task_id} "
@@ -114,7 +117,6 @@ class LegaloomEnvironment(Environment):
             steps_used = self._state.step_count
             max_steps  = self._task["max_steps"]
 
-            # Enforce max_steps inside env — not just in inference.py
             if steps_used > max_steps:
                 return self._force_close(steps_used, max_steps)
 
@@ -137,9 +139,9 @@ class LegaloomEnvironment(Environment):
                     return handler(params, steps_used)
                 return handler(params, steps_used, max_steps)
 
-            # Unknown action — penalise
+            # Unknown action — penalise (but still above floor)
             return TDSObservation(
-                done=False, reward=-0.05,
+                done=False, reward=_R_MIN,
                 invoice_text=self._invoice_text(),
                 action_result=(
                     f"Unknown action_type: '{action_type}'. "
@@ -151,9 +153,8 @@ class LegaloomEnvironment(Environment):
                 hint=self._build_hint(),
             )
         except Exception as exc:
-            # Catch all exceptions — return safe error observation, never crash
             return TDSObservation(
-                done=False, reward=0.001,
+                done=False, reward=_R_MIN,
                 invoice_text=self._invoice_text() if self._task else "",
                 action_result=f"Environment error: {exc}. Please retry your action.",
                 available_actions=self._available_actions() if self._task else ["read_invoice"],
@@ -175,7 +176,7 @@ class LegaloomEnvironment(Environment):
         if not gt["pan_valid"]:
             guidance += " IMPORTANT: Always verify PAN status before computing TDS."
         return TDSObservation(
-            done=False, reward=0.001,
+            done=False, reward=_R_MIN,
             invoice_text=self._task["invoice_text"],
             action_result=f"Invoice retrieved. {guidance}",
             available_actions=self._available_actions(),
@@ -194,7 +195,6 @@ class LegaloomEnvironment(Environment):
         reward = self._award("pan_checked")
         self._state.pan_checked = True
 
-        # Use our PAN registry if available, else check against ground truth
         try:
             from server.pan_registry import PAN_DB
         except ImportError:
@@ -203,7 +203,6 @@ class LegaloomEnvironment(Environment):
         if record:
             result = pan_status_message(pan)
         else:
-            # Fall back to ground truth
             gt = self._task["ground_truth"]
             vendor_pan = self._task["vendor_pan"]
             if pan == vendor_pan:
@@ -217,10 +216,9 @@ class LegaloomEnvironment(Environment):
             else:
                 result = f"PAN {pan} not found in registry. Verify the PAN from the invoice."
 
-        # Award extra if correctly flagging inoperative
         gt = self._task["ground_truth"]
         if not gt["pan_valid"] and "INOPERATIVE" in result.upper():
-            reward += self._award("pan_inoperative_flagged")
+            reward = _r(reward + self._award("pan_inoperative_flagged"))
 
         return TDSObservation(
             done=False, reward=reward,
@@ -254,11 +252,10 @@ class LegaloomEnvironment(Environment):
             f"YTD paid: INR {ytd:,.0f} | Running total: INR {ytd+amount:,.0f}. "
             f"Single limit: INR {s['threshold_single']:,} | "
             f"Annual limit: INR {s['threshold_annual']:,}. "
-            f"Result: {'TDS IS applicable — threshold crossed.' if crossed else 'TDS NOT applicable — below threshold. No deduction required.'}"
+            f"Result: {'TDS IS applicable — threshold crossed.' if crossed else 'TDS NOT applicable — below threshold.'}"
         )
 
         reward = self._award("threshold_checked")
-
         return TDSObservation(
             done=False, reward=reward,
             invoice_text=self._invoice_text(),
@@ -290,9 +287,7 @@ class LegaloomEnvironment(Environment):
             else:
                 result = f"No payment history found for PAN {pan} in current financial year."
 
-        # Award threshold_checked reward (same breakpoint as check_threshold — symmetric)
         reward = self._award("threshold_checked")
-
         return TDSObservation(
             done=False, reward=reward,
             invoice_text=self._invoice_text(),
@@ -326,9 +321,7 @@ class LegaloomEnvironment(Environment):
             f"Confidence: {result_dict.get('confidence', 'medium')}."
         )
 
-        # Award if correct section matched, OR if TDS not applicable
-        # (section doesn't matter when amount is below threshold)
-        reward = 0.001  # floor: never return 0.0
+        reward = _R_MIN
         expected_section = gt["section"]
         tds_applicable = gt.get("tds_applicable", True)
         section_match = (
@@ -353,7 +346,6 @@ class LegaloomEnvironment(Environment):
         self._law_queried = True
 
         if not section or section not in TDS_SECTIONS:
-            # Return overview of all sections
             result = "TDS Sections overview (FY 2025-26):\n"
             for code, data in TDS_SECTIONS.items():
                 result += (
@@ -361,7 +353,7 @@ class LegaloomEnvironment(Environment):
                     f"Rate: {data['rate_default']}% — "
                     f"Threshold: INR {data.get('threshold_annual',0):,}/year\n"
                 )
-            result += "\nUse query_law with section parameter for details. E.g.: {\"section\": \"194J\"}"
+            result += '\nUse query_law with section parameter for details. E.g.: {"section": "194J"}'
         else:
             s = TDS_SECTIONS[section]
             result = (
@@ -382,7 +374,7 @@ class LegaloomEnvironment(Environment):
             )
 
         return TDSObservation(
-            done=False, reward=0.001,
+            done=False, reward=_R_MIN,
             invoice_text=self._invoice_text(),
             action_result=result,
             available_actions=self._available_actions(),
@@ -394,11 +386,9 @@ class LegaloomEnvironment(Environment):
         self._state.answer_submitted = True
         gt = self._task["ground_truth"]
 
-        # Use explicit grader — deterministic, task-specific rubric
         grader_result = grade_submission(params, gt, task_id=self._current_task_id)
         fb = grader_result["feedback"]
 
-        # Map grader breakdown to reward breakpoints (partial credit)
         if grader_result["breakdown"].get("no_tds_correct") or \
                 grader_result["breakdown"].get("amount_correct"):
             self._award("amount_exact")
@@ -409,7 +399,7 @@ class LegaloomEnvironment(Environment):
         if grader_result["breakdown"].get("gst_base_correct"):
             self._award("gst_base_correct")
 
-        # Use grader score as authoritative final reward so inference.py score is correct
+        # Grader score is already clamped strictly in (0.0, 1.0)
         final_reward = grader_result["score"]
         self._episode_reward = final_reward
         return self._end_episode(final_reward, fb, steps_used)
@@ -419,13 +409,14 @@ class LegaloomEnvironment(Environment):
     # ------------------------------------------------------------------
 
     def _end_episode(self, reward, feedback_parts, steps_used) -> TDSObservation:
-        total_score = min(max(self._episode_reward, 0.001), 0.999)  # strictly (0,1) exclusive
+        total_score = _r(reward)   # strictly in (0.0, 1.0)
         result = (
             f"Episode complete. {' | '.join(feedback_parts)} "
             f"Final score: {total_score:.3f}."
         )
         return TDSObservation(
-            done=True, reward=total_score,  # return cumulative episode score, not step increment
+            done=True,
+            reward=total_score,
             invoice_text=self._task["invoice_text"],
             action_result=result,
             available_actions=[],
@@ -435,21 +426,13 @@ class LegaloomEnvironment(Environment):
         )
 
     def _award(self, key: str) -> float:
-        """Award reward for a breakpoint exactly once per episode.
-
-        Design note — get(key, True) is intentional, not a bug:
-          • Before reset() runs, _reward_earned = {} (empty dict from __init__).
-          • get(key, True) returns True  →  body returns 0.001, no reward leaks.
-          • After reset(), every key in task["reward_breakpoints"] is seeded False.
-          • get(key, True) then returns False  →  reward is awarded once, flipped True.
-        This makes _award() safe to call at any lifecycle stage without guard clauses.
-        """
-        # True = already awarded (or not yet registered) — both cases return 0.0
+        """Award reward for a breakpoint exactly once per episode. Always > 0."""
         if self._reward_earned.get(key, True):
-            return 0.001  # strictly > 0 — hackathon requires no 0.0 rewards
-        reward = float(self._task["reward_breakpoints"].get(key, 0.001))
+            return _R_MIN
+        reward = float(self._task["reward_breakpoints"].get(key, _R_MIN))
+        reward = _r(reward)
         self._reward_earned[key] = True
-        self._episode_reward = min(self._episode_reward + reward, 0.999)  # strictly (0,1) exclusive
+        self._episode_reward = _r(self._episode_reward + reward)
         return reward
 
     def _invoice_text(self) -> str:
@@ -458,10 +441,8 @@ class LegaloomEnvironment(Environment):
     def _available_actions(self) -> list:
         if not self._invoice_read:
             return ["read_invoice"]
-        actions = ["check_pan", "check_threshold", "query_ytd",
-                   "lookup_section", "query_law", "submit_answer"]
-        seen = set()
-        return [a for a in actions if not (a in seen or seen.add(a))]
+        return ["check_pan", "check_threshold", "query_ytd",
+                "lookup_section", "query_law", "submit_answer"]
 
     def _build_hint(self) -> str:
         if self._task and not self._task.get("hint_enabled", True):
@@ -478,7 +459,7 @@ class LegaloomEnvironment(Environment):
 
     def _error_obs(self, message: str, steps_used: int, max_steps: int) -> TDSObservation:
         return TDSObservation(
-            done=False, reward=0.001,
+            done=False, reward=_R_MIN,
             invoice_text=self._invoice_text(),
             action_result=message,
             available_actions=self._available_actions(),
@@ -488,7 +469,7 @@ class LegaloomEnvironment(Environment):
 
     def _force_close(self, steps_used: int, max_steps: int) -> TDSObservation:
         return TDSObservation(
-            done=True, reward=0.001,
+            done=True, reward=_R_MIN,
             invoice_text=self._invoice_text(),
             action_result=(
                 f"Episode terminated: exceeded {max_steps} steps without submitting. "
@@ -506,9 +487,3 @@ class LegaloomEnvironment(Environment):
     def get_state(self) -> TDSState:
         """Callable method alias for OpenEnv HTTP routing (state() endpoint)."""
         return self._state
-
-
-# ---------------------------------------------------------------------------
-# Explicit grader functions — exposed for external evaluation
-# Scores are always in [0.0, 1.0] and deterministic given same state
-# ---------------------------------------------------------------------------

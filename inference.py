@@ -4,7 +4,7 @@ inference.py — LegaLoom-Env Baseline Inference Script
 Mandatory variables:
     API_BASE_URL     : LLM endpoint
     MODEL_NAME       : model identifier
-    HF_TOKEN         : Hugging Face API key (no default)
+    HF_TOKEN         : Hugging Face API key
     LOCAL_IMAGE_NAME : Docker image name (optional)
 
 Stdout format (strictly enforced by hackathon spec):
@@ -12,7 +12,7 @@ Stdout format (strictly enforced by hackathon spec):
     [STEP]  step=<n> action=<str> reward=<0.00> done=<true|false> error=<msg|null>
     [END]   success=<true|false> steps=<n> rewards=<r1,r2,...,rn>
 
-Note: score is computed and printed to stderr only — not stdout.
+Reward contract: every reward value is strictly in (0.0, 1.0) exclusive.
 """
 
 import json
@@ -24,9 +24,7 @@ from typing import List, Optional
 from openai import OpenAI
 
 # ---------------------------------------------------------------------------
-# Mandatory environment variables — per hackathon spec
-# API_BASE_URL and MODEL_NAME have defaults
-# HF_TOKEN has NO default (must be provided by evaluator)
+# Mandatory environment variables
 # ---------------------------------------------------------------------------
 API_BASE_URL     = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME       = os.getenv("MODEL_NAME",   "Qwen/Qwen2.5-72B-Instruct")
@@ -35,9 +33,17 @@ API_KEY          = HF_TOKEN or os.getenv("API_KEY")
 LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
 
 BENCHMARK   = "legaloom_env"
-MAX_STEPS   = 10          # enough for expert task (10 steps allowed)
-TEMPERATURE = 0            # 0 = deterministic, required for reproducible baseline scores
+MAX_STEPS   = 10
+TEMPERATURE = 0
 MAX_TOKENS  = 300
+
+# Reward bounds — strictly open (0.0, 1.0)
+_R_MIN = 0.05
+_R_MAX = 0.95
+
+
+def _clamp(v: float) -> float:
+    return round(min(max(float(v), _R_MIN), _R_MAX), 4)
 
 
 # ---------------------------------------------------------------------------
@@ -53,27 +59,31 @@ def log_step(step: int, action: str, reward: float,
     error_val    = error if error else "null"
     done_val     = str(done).lower()
     action_clean = action.replace("\n", " ").replace("\r", "")[:200]
-    logged_reward = max(reward, 0.001)   # strictly > 0 — hackathon requires no 0.0
+    # Reward must be strictly in (0.0, 1.0) — clamp here as final safety net
+    logged_reward = _clamp(reward)
     print(
         f"[STEP] step={step} action={action_clean} "
-        f"reward={logged_reward:.3f} done={done_val} error={error_val}",
+        f"reward={logged_reward:.2f} done={done_val} error={error_val}",
         flush=True,
     )
 
 
 def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
-    rewards_str = ",".join(f"{max(r, 0.001):.3f}" for r in rewards)
-    success_val = "true" if success else "false"
-    # Spec format: [END] success= steps= rewards= (score emitted to stderr only)
+    # Clamp all individual rewards — evaluator checks each one
+    safe_rewards = [_clamp(r) for r in rewards]
+    rewards_str  = ",".join(f"{r:.2f}" for r in safe_rewards)
+    success_val  = "true" if success else "false"
+    # Clamp the overall score too
+    safe_score   = _clamp(score)
     print(
         f"[END] success={success_val} steps={steps} rewards={rewards_str}",
         flush=True,
     )
-    print(f"[SCORE] {score:.3f}", file=sys.stderr, flush=True)
+    print(f"[SCORE] {safe_score:.3f}", file=sys.stderr, flush=True)
 
 
 # ---------------------------------------------------------------------------
-# System prompt — teaches the LLM how to interact with LegaLoom-Env
+# System prompt
 # ---------------------------------------------------------------------------
 
 SYSTEM_PROMPT = textwrap.dedent("""
@@ -100,7 +110,7 @@ AVAILABLE ACTIONS:
    {"action_type": "lookup_section", "parameters": {"description": "<service>"}}
 
 5. Check if TDS threshold is crossed:
-   {"action_type": "check_threshold", "parameters": {"section": "194J", "amount": <INR>}}
+   {"action_type": "check_threshold", "parameters": {"section": "194J", "amount": 85000}}
 
 6. Look up exact law text for a section:
    {"action_type": "query_law", "parameters": {"section": "194J"}}
@@ -109,8 +119,7 @@ AVAILABLE ACTIONS:
    {"action_type": "submit_answer", "parameters": {
      "tds_amount_inr": <AMOUNT>,
      "section": "<194J>",
-     "rate_percent": <RATE>,
-     "pan_status": "inoperative"  (include ONLY if PAN is inoperative)
+     "rate_percent": <RATE>
    }}
 
    For NO TDS cases (below threshold):
@@ -136,16 +145,16 @@ SECTION IDENTIFICATION:
 
 CRITICAL RULES:
   1. ALWAYS check PAN status first
-  2. INOPERATIVE PAN → 20% flat, overrides ALL section rates (Section 206AA)
-  3. MISSING PAN → also 20%
+  2. INOPERATIVE PAN: 20% flat, overrides ALL section rates (Section 206AA)
+  3. MISSING PAN: also 20%
   4. Thresholds FY 2025-26: 194J=50,000 | 194C=30,000/1,00,000 |
      194I=6,00,000/year | 194H=20,000
-  5. GST shown separately → TDS on pre-GST amount
-     GST bundled in total → TDS on FULL invoice amount
-  6. Goods line items (hardware, products, materials) → NO TDS
+  5. GST shown separately: TDS on pre-GST amount
+     GST bundled in total: TDS on FULL invoice amount
+  6. Goods line items (hardware, products, materials): NO TDS
      TDS only on service/rent/commission portion
-  7. Mixed invoice → split line items, apply TDS only to service portion
-  8. Below threshold → submit with tds_amount_inr=0.0 and no_tds="true"
+  7. Mixed invoice: split line items, apply TDS only to service portion
+  8. Below threshold: submit with tds_amount_inr=0.0 and no_tds="true"
 
 RECOMMENDED STRATEGY:
   Step 1: read_invoice
@@ -160,7 +169,7 @@ Output ONLY the JSON. Nothing else.
 
 
 # ---------------------------------------------------------------------------
-# Build user prompt from current observation
+# Build user prompt
 # ---------------------------------------------------------------------------
 
 def build_user_prompt(step: int, obs: dict, history: List[str]) -> str:
@@ -220,14 +229,13 @@ def get_agent_action(client: OpenAI, step: int, obs: dict,
                                 "rate_percent": 0.0, "no_tds": "true"}}
     except Exception as e:
         print(f"[DEBUG] LLM call failed at step {step}: {e}", flush=True)
-        # On API failure, submit a graceful exit rather than looping
         return {"action_type": "submit_answer",
                 "parameters": {"tds_amount_inr": 0.0, "section": "194J",
                                 "rate_percent": 0.0, "no_tds": "true"}}
 
 
 # ---------------------------------------------------------------------------
-# Run one full episode for a single task
+# Run one full episode
 # ---------------------------------------------------------------------------
 
 def run_episode(client: OpenAI, env, task_id: str) -> dict:
@@ -237,15 +245,13 @@ def run_episode(client: OpenAI, env, task_id: str) -> dict:
     history: List[str]   = []
     steps_taken = 0
     success     = False
-    score       = 0.0
+    score       = _R_MIN
 
     log_start(task=task_id, env=BENCHMARK, model=MODEL_NAME)
 
     try:
-        # Reset environment with this task
         result = env.reset(task_id=task_id)
 
-        # Unpack observation (local env returns obs directly)
         if hasattr(result, "observation"):
             obs  = result.observation.__dict__ if hasattr(result.observation, "__dict__") else {}
             done = result.done
@@ -257,12 +263,10 @@ def run_episode(client: OpenAI, env, task_id: str) -> dict:
             if done:
                 break
 
-            # Get action from LLM
             action_dict = get_agent_action(client, step, obs, history)
             action_type = action_dict.get("action_type", "read_invoice")
             parameters  = action_dict.get("parameters", {})
 
-            # Build compact action string for [STEP] log
             action_str = (
                 f"{action_type}("
                 + ",".join(f"{k}={v}" for k, v in parameters.items())
@@ -277,21 +281,20 @@ def run_episode(client: OpenAI, env, task_id: str) -> dict:
                 ))
                 if hasattr(result, "observation"):
                     obs    = result.observation.__dict__ if hasattr(result.observation, "__dict__") else {}
-                    reward = float(result.reward) if result.reward is not None else 0.001
+                    reward = float(result.reward) if result.reward is not None else _R_MIN
                     done   = result.done
                 else:
                     obs    = result.__dict__ if hasattr(result, "__dict__") else {}
-                    reward = float(getattr(result, "reward", 0.001) or 0.001)
+                    reward = float(getattr(result, "reward", _R_MIN) or _R_MIN)
                     done   = getattr(result, "done", False)
 
             except Exception as e:
-                reward = 0.001  # floor: exception path must not emit 0.0
+                reward = _R_MIN
                 done   = False
                 error  = str(e)[:120]
 
-            # Clamp every step reward to strictly (0.001, 0.999)
-            # Grader checks EACH value in the rewards list, not just the sum
-            reward = round(min(max(reward, 0.001), 0.999), 3)
+            # Every per-step reward must be strictly in (0.0, 1.0)
+            reward = _clamp(reward)
             rewards.append(reward)
             steps_taken = step
 
@@ -306,14 +309,21 @@ def run_episode(client: OpenAI, env, task_id: str) -> dict:
             if done:
                 break
 
-        # score = sum of ALL step rewards, clamped strictly to (0.001, 0.999).
-        # Phase 2 requires strict (0,1) — never 0.0 or 1.0 exactly.
-        raw_score = sum(rewards) if rewards else 0.0
-        score     = round(min(max(raw_score, 0.001), 0.999), 4)
-        success   = score >= 0.5
+        # Final score: use the last reward from done=True step (the grader score)
+        # That reward is already clamped by the environment.
+        # Fallback: average of all step rewards.
+        if rewards:
+            # The final reward (done=True) is the authoritative grader score
+            last_reward = rewards[-1]
+            score = _clamp(last_reward)
+        else:
+            score = _R_MIN
+
+        success = score >= 0.5
 
     except Exception as e:
         print(f"[DEBUG] Episode error for {task_id}: {e}", flush=True)
+        score = _R_MIN
 
     finally:
         log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
@@ -336,8 +346,6 @@ def main() -> None:
     results  = []
 
     if LOCAL_IMAGE_NAME:
-        # Docker mode — connect to a running containerised environment
-        # Start: docker run -p 7860:7860 <LOCAL_IMAGE_NAME>
         print(f"[INFO] Docker mode: {LOCAL_IMAGE_NAME}", file=sys.stderr)
         from client import LegaloomEnv
         env_url = os.getenv("ENV_BASE_URL", "http://localhost:7860")
@@ -362,7 +370,6 @@ def main() -> None:
             result = run_episode(client, LocalEnvWrapper(env), task_id)
             results.append(result)
 
-    # Summary to stderr — keeps stdout log clean for parser
     print("\n[SUMMARY]", file=sys.stderr)
     for r in results:
         print(

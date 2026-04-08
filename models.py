@@ -10,6 +10,13 @@ from pydantic import Field, field_validator
 
 
 # ---------------------------------------------------------------------------
+# Reward clamping constants — hackathon requires strictly (0.0, 1.0) exclusive
+# ---------------------------------------------------------------------------
+_REWARD_MIN = 0.05   # never return exactly 0.0
+_REWARD_MAX = 0.95   # never return exactly 1.0
+
+
+# ---------------------------------------------------------------------------
 # Action — what the agent sends to the environment each step
 # ---------------------------------------------------------------------------
 
@@ -17,13 +24,13 @@ class TDSAction(Action):
     """
     One step the agent takes inside the TDS compliance environment.
 
-    The agent picks an action_type and supplies relevant parameters.
     Valid action_types:
-
       "read_invoice"     — request the full invoice text (first step)
       "check_pan"        — verify PAN status for a given PAN number
       "check_threshold"  — ask if cumulative YTD payments cross the TDS threshold
+      "query_ytd"        — query year-to-date payments to a vendor
       "lookup_section"   — ask what TDS section applies to a described service
+      "query_law"        — look up the law text for a section
       "submit_answer"    — submit final TDS deduction in INR (terminates episode)
     """
 
@@ -31,7 +38,7 @@ class TDSAction(Action):
         ...,
         description=(
             "One of: read_invoice | check_pan | check_threshold "
-            "| lookup_section | submit_answer"
+            "| query_ytd | lookup_section | query_law | submit_answer"
         ),
     )
     parameters: Dict[str, Any] = Field(
@@ -55,69 +62,51 @@ class TDSObservation(Observation):
     """
     What the agent sees after each action.
 
-    Inherits from Observation which already provides:
-      done   : bool
-      reward : Optional[float]
-
-    We override reward to always be float (never None) for spec compliance.
+    reward is always strictly in (0.0, 1.0) exclusive — never 0.0 or 1.0.
     """
 
-    # Override reward to always be float — spec requires numeric reward
+    # Override reward to always be strictly in (0.0, 1.0) exclusive
     reward: float = Field(
-        default=0.0,
-        description="Reward for this step. Always a float (0.0 when no reward).",
+        default=_REWARD_MIN,
+        description="Reward for this step. Always strictly in (0.0, 1.0) exclusive.",
     )
 
     @field_validator("reward", mode="before")
     @classmethod
     def clamp_reward(cls, v: float) -> float:
         """
-        Enforce hackathon Phase 2 rule at the model level:
-        Episode-ending rewards must be strictly in (0, 1) — never 0.0, never 1.0.
-
-        Clamping rules:
-          v == 0.0        → 0.0   (normal no-reward step — left alone)
-          v < 0           → v     (penalty steps like -0.05 — left alone)
-          0 < v < 0.001   → 0.001 (too small, floor it)
-          0.001 ≤ v ≤ 0.999 → v  (already in range)
-          v > 0.999       → 0.999 (cap — catches the reward=1.0 case)
+        Enforce hackathon Phase 2 rule: scores must be strictly in (0.0, 1.0).
+        Any value <= 0.0 is raised to _REWARD_MIN.
+        Any value >= 1.0 is lowered to _REWARD_MAX.
         """
         v = float(v)
-        if v > 0.0:                     # only clamp positive rewards
-            v = round(min(max(v, 0.001), 0.999), 4)
-        return v
+        return round(min(max(v, _REWARD_MIN), _REWARD_MAX), 4)
 
-    # The invoice text — populated on first read_invoice action
     invoice_text: str = Field(
         default="",
         description="Full invoice text. Populated after read_invoice action.",
     )
 
-    # Result of the agent's last action in plain English
     action_result: str = Field(
         default="",
         description="Environment's response to the agent's last action.",
     )
 
-    # Which actions the agent can legally take right now
     available_actions: List[str] = Field(
         default_factory=lambda: ["read_invoice"],
         description="List of valid action_type values for the next step.",
     )
 
-    # Running step counter so agent knows how many steps it has used
     steps_used: int = Field(
         default=0,
         description="Number of steps taken so far in this episode.",
     )
 
-    # Max steps allowed for this task
     max_steps: int = Field(
         default=8,
         description="Maximum steps allowed before episode is force-closed.",
     )
 
-    # General guidance — suppressed on hard task to increase difficulty
     hint: str = Field(
         default="",
         description="Optional guidance. Empty string on hard difficulty.",
@@ -131,23 +120,18 @@ class TDSObservation(Observation):
 class TDSState(State):
     """
     Metadata about the current episode.
-
-    Inherits from State which already provides:
-      episode_id  : Optional[str]
-      step_count  : int
     """
 
     task_id: str = Field(
         default="",
-        description="Which task is currently active: task_easy | task_medium | task_hard",
+        description="Which task is currently active: task_easy | task_medium | task_hard | task_expert",
     )
 
     difficulty: str = Field(
         default="",
-        description="easy | medium | hard",
+        description="easy | medium | hard | expert",
     )
 
-    # Track which sub-checks the agent has completed (for reward shaping)
     pan_checked: bool = Field(
         default=False,
         description="True once agent has called check_pan.",

@@ -36,7 +36,7 @@ class LegaloomEnv(EnvClient[TDSAction, TDSObservation, TDSState]):
         obs_data = payload.get("observation", {})
         observation = TDSObservation(
             done=payload.get("done", False),
-            reward=payload.get("reward", 0.0),
+            reward=payload.get("reward", 0.001),
             invoice_text=obs_data.get("invoice_text", ""),
             action_result=obs_data.get("action_result", ""),
             available_actions=obs_data.get("available_actions", []),
@@ -46,7 +46,7 @@ class LegaloomEnv(EnvClient[TDSAction, TDSObservation, TDSState]):
         )
         return StepResult(
             observation=observation,
-            reward=payload.get("reward", 0.0),
+            reward=payload.get("reward", 0.001),
             done=payload.get("done", False),
         )
 
