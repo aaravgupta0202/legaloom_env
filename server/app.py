@@ -1,21 +1,15 @@
-"""
-FastAPI server for LegaLoom-Env.
-"""
+"""FastAPI server for LegaLoom-Env."""
 
-import sys
-import os
-
-# Ensure /app is on the path so absolute imports work
+import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
     from openenv.core.env_server.http_server import create_app
 except Exception as e:
-    raise ImportError("openenv is required. Run: pip install openenv-core") from e
+    raise ImportError("openenv-core required. Run: pip install openenv-core") from e
 
 from models import TDSAction, TDSObservation
 from server.legaloom_env_environment import LegaloomEnvironment
-
 
 app = create_app(
     LegaloomEnvironment,
