@@ -86,7 +86,7 @@ class LegaloomEnvironment(Environment):
 
         return TDSObservation(
             done=False,
-            reward=0.0,
+            reward=0.001,
             invoice_text="",
             action_result=(
                 f"New episode started. Task: {task_id} "
@@ -153,7 +153,7 @@ class LegaloomEnvironment(Environment):
         except Exception as exc:
             # Catch all exceptions — return safe error observation, never crash
             return TDSObservation(
-                done=False, reward=0.0,
+                done=False, reward=0.001,
                 invoice_text=self._invoice_text() if self._task else "",
                 action_result=f"Environment error: {exc}. Please retry your action.",
                 available_actions=self._available_actions() if self._task else ["read_invoice"],
@@ -175,7 +175,7 @@ class LegaloomEnvironment(Environment):
         if not gt["pan_valid"]:
             guidance += " IMPORTANT: Always verify PAN status before computing TDS."
         return TDSObservation(
-            done=False, reward=0.0,
+            done=False, reward=0.001,
             invoice_text=self._task["invoice_text"],
             action_result=f"Invoice retrieved. {guidance}",
             available_actions=self._available_actions(),
@@ -328,7 +328,7 @@ class LegaloomEnvironment(Environment):
 
         # Award if correct section matched, OR if TDS not applicable
         # (section doesn't matter when amount is below threshold)
-        reward = 0.0
+        reward = 0.001  # floor: never return 0.0
         expected_section = gt["section"]
         tds_applicable = gt.get("tds_applicable", True)
         section_match = (
@@ -382,7 +382,7 @@ class LegaloomEnvironment(Environment):
             )
 
         return TDSObservation(
-            done=False, reward=0.0,
+            done=False, reward=0.001,
             invoice_text=self._invoice_text(),
             action_result=result,
             available_actions=self._available_actions(),
@@ -439,14 +439,14 @@ class LegaloomEnvironment(Environment):
 
         Design note — get(key, True) is intentional, not a bug:
           • Before reset() runs, _reward_earned = {} (empty dict from __init__).
-          • get(key, True) returns True  →  body returns 0.0, no reward leaks.
+          • get(key, True) returns True  →  body returns 0.001, no reward leaks.
           • After reset(), every key in task["reward_breakpoints"] is seeded False.
           • get(key, True) then returns False  →  reward is awarded once, flipped True.
         This makes _award() safe to call at any lifecycle stage without guard clauses.
         """
         # True = already awarded (or not yet registered) — both cases return 0.0
         if self._reward_earned.get(key, True):
-            return 0.0
+            return 0.001  # strictly > 0 — hackathon requires no 0.0 rewards
         reward = float(self._task["reward_breakpoints"].get(key, 0.0))
         self._reward_earned[key] = True
         self._episode_reward = min(self._episode_reward + reward, 0.999)  # strictly (0,1) exclusive
@@ -478,7 +478,7 @@ class LegaloomEnvironment(Environment):
 
     def _error_obs(self, message: str, steps_used: int, max_steps: int) -> TDSObservation:
         return TDSObservation(
-            done=False, reward=0.0,
+            done=False, reward=0.001,
             invoice_text=self._invoice_text(),
             action_result=message,
             available_actions=self._available_actions(),
@@ -488,7 +488,7 @@ class LegaloomEnvironment(Environment):
 
     def _force_close(self, steps_used: int, max_steps: int) -> TDSObservation:
         return TDSObservation(
-            done=True, reward=0.0,
+            done=True, reward=0.001,
             invoice_text=self._invoice_text(),
             action_result=(
                 f"Episode terminated: exceeded {max_steps} steps without submitting. "
