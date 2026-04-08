@@ -13,7 +13,8 @@ RUN pip install --no-cache-dir \
     fastapi \
     uvicorn \
     pydantic \
-    openai
+    openai \
+    httpx
 
 ENV PYTHONPATH="/app:$PYTHONPATH"
 

@@ -48,9 +48,12 @@ class LegaloomEnvironment(Environment):
         self._invoice_read  = False
         self._ytd_queried   = False
         self._law_queried   = False
-        self._reward_earned = {}
+        # Initialize reward_earned so _award() never accidentally pays before reset()
+        self._reward_earned = {}   # reset() populates keys; get(key,True) = already-earned safe default
         self._episode_reward= 0.0
         self._current_task_id = "task_easy"
+        self._pan_checked_pan = None
+        self._section_found   = None
 
     # ------------------------------------------------------------------
     # reset()
@@ -287,8 +290,11 @@ class LegaloomEnvironment(Environment):
             else:
                 result = f"No payment history found for PAN {pan} in current financial year."
 
+        # Award threshold_checked reward (same breakpoint as check_threshold — symmetric)
+        reward = self._award("threshold_checked")
+
         return TDSObservation(
-            done=False, reward=0.0,
+            done=False, reward=reward,
             invoice_text=self._invoice_text(),
             action_result=result,
             available_actions=self._available_actions(),
@@ -388,35 +394,38 @@ class LegaloomEnvironment(Environment):
         self._state.answer_submitted = True
         gt = self._task["ground_truth"]
 
-        # Use explicit grader — deterministic, separated from env logic
-        grader_result = grade_submission(params, gt)
-        fb     = grader_result["feedback"]
-        reward = 0.0
+        # Use explicit grader — deterministic, task-specific rubric
+        grader_result = grade_submission(params, gt, task_id=self._current_task_id)
+        fb = grader_result["feedback"]
 
-        # Map grader score to reward breakpoints so partial rewards still flow
-        if grader_result["breakdown"].get("no_tds_correct") or            grader_result["breakdown"].get("amount_correct"):
-            reward += self._award("amount_exact")
+        # Map grader breakdown to reward breakpoints (partial credit)
+        if grader_result["breakdown"].get("no_tds_correct") or \
+                grader_result["breakdown"].get("amount_correct"):
+            self._award("amount_exact")
         if grader_result["breakdown"].get("pan_inoperative_detected"):
-            reward += self._award("pan_inoperative_flagged")
+            self._award("pan_inoperative_flagged")
         if grader_result["breakdown"].get("goods_excluded"):
-            reward += self._award("goods_excluded")
+            self._award("goods_excluded")
         if grader_result["breakdown"].get("gst_base_correct"):
-            reward += self._award("gst_base_correct")
+            self._award("gst_base_correct")
 
-        return self._end_episode(reward, fb, steps_used)
+        # Use grader score as authoritative final reward so inference.py score is correct
+        final_reward = grader_result["score"]
+        self._episode_reward = final_reward
+        return self._end_episode(final_reward, fb, steps_used)
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
 
     def _end_episode(self, reward, feedback_parts, steps_used) -> TDSObservation:
-        total_score = min(max(self._episode_reward, 0.0), 1.0)
+        total_score = min(max(self._episode_reward, 0.001), 0.999)  # strictly (0,1) exclusive
         result = (
             f"Episode complete. {' | '.join(feedback_parts)} "
             f"Final score: {total_score:.3f}."
         )
         return TDSObservation(
-            done=True, reward=float(reward),  # always float, never None
+            done=True, reward=total_score,  # return cumulative episode score, not step increment
             invoice_text=self._task["invoice_text"],
             action_result=result,
             available_actions=[],
@@ -426,13 +435,21 @@ class LegaloomEnvironment(Environment):
         )
 
     def _award(self, key: str) -> float:
-        """Award reward for a breakpoint exactly once per episode."""
-        # If key not in reward_earned dict, treat as already awarded (safe default)
+        """Award reward for a breakpoint exactly once per episode.
+
+        Design note — get(key, True) is intentional, not a bug:
+          • Before reset() runs, _reward_earned = {} (empty dict from __init__).
+          • get(key, True) returns True  →  body returns 0.0, no reward leaks.
+          • After reset(), every key in task["reward_breakpoints"] is seeded False.
+          • get(key, True) then returns False  →  reward is awarded once, flipped True.
+        This makes _award() safe to call at any lifecycle stage without guard clauses.
+        """
+        # True = already awarded (or not yet registered) — both cases return 0.0
         if self._reward_earned.get(key, True):
             return 0.0
         reward = float(self._task["reward_breakpoints"].get(key, 0.0))
         self._reward_earned[key] = True
-        self._episode_reward = min(self._episode_reward + reward, 1.0)
+        self._episode_reward = min(self._episode_reward + reward, 0.999)  # strictly (0,1) exclusive
         return reward
 
     def _invoice_text(self) -> str:
@@ -484,6 +501,10 @@ class LegaloomEnvironment(Environment):
 
     @property
     def state(self) -> TDSState:
+        return self._state
+
+    def get_state(self) -> TDSState:
+        """Callable method alias for OpenEnv HTTP routing (state() endpoint)."""
         return self._state
 
 

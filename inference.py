@@ -36,7 +36,7 @@ LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
 
 BENCHMARK   = "legaloom_env"
 MAX_STEPS   = 10          # enough for expert task (10 steps allowed)
-TEMPERATURE = 0.1         # very low — tax compliance needs determinism
+TEMPERATURE = 0            # 0 = deterministic, required for reproducible baseline scores
 MAX_TOKENS  = 300
 
 
@@ -62,13 +62,12 @@ def log_step(step: int, action: str, reward: float,
 
 def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
     rewards_str = ",".join(f"{r:.2f}" for r in rewards)
-    # Spec format: exactly [END] success= steps= rewards= (no score= on stdout)
     success_val = "true" if success else "false"
+    # Spec format: [END] success= steps= rewards= (score emitted to stderr only)
     print(
         f"[END] success={success_val} steps={steps} rewards={rewards_str}",
         flush=True,
     )
-    # Score logged to stderr so it doesn't interfere with the parser
     print(f"[SCORE] {score:.3f}", file=sys.stderr, flush=True)
 
 
@@ -303,8 +302,11 @@ def run_episode(client: OpenAI, env, task_id: str) -> dict:
             if done:
                 break
 
-        score   = min(max(sum(rewards), 0.0), 1.0)
-        success = score >= 0.5
+        # score = sum of ALL step rewards, clamped strictly to (0.001, 0.999).
+        # Phase 2 requires strict (0,1) — never 0.0 or 1.0 exactly.
+        raw_score = sum(rewards) if rewards else 0.0
+        score     = round(min(max(raw_score, 0.001), 0.999), 4)
+        success   = score >= 0.5
 
     except Exception as e:
         print(f"[DEBUG] Episode error for {task_id}: {e}", flush=True)

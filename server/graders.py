@@ -2,7 +2,7 @@
 Explicit grader functions for LegaLoom-Env.
 
 Each grader takes the submitted answer and ground truth,
-and returns a normalised score in [0.0, 1.0].
+and returns a normalised score strictly in (0.001, 0.999).
 These functions are deterministic — same inputs always give same output.
 """
 
@@ -11,61 +11,85 @@ from typing import Dict, Any
 AMOUNT_TOLERANCE_INR = 1.0
 
 
-def grade_submission(params: Dict[str, Any], ground_truth: Dict[str, Any]) -> Dict[str, Any]:
+def _clamp(score: float) -> float:
+    return round(min(max(score, 0.001), 0.999), 4)
+
+
+def grade_submission(
+    params: Dict[str, Any],
+    ground_truth: Dict[str, Any],
+    task_id: str = "task_easy",
+) -> Dict[str, Any]:
     """
-    Primary grader. Evaluates a submit_answer action against ground truth.
-
-    Args:
-        params       : dict from submit_answer parameters
-        ground_truth : invoice ground truth dict from invoice_db.json
-
-    Returns:
-        {
-            "score":    float in [0.0, 1.0],
-            "correct":  bool,
-            "feedback": list of str,
-            "breakdown": dict
-        }
+    Primary grader. Weights adapt per task_id so a perfect answer always
+    scores ~0.999 regardless of difficulty.
     """
     submitted_amount  = float(params.get("tds_amount_inr", -1))
     submitted_section = str(params.get("section", "")).strip().upper()
     submitted_rate    = float(params.get("rate_percent", -1))
     no_tds_flag       = str(params.get("no_tds", "")).lower() == "true"
 
-    feedback   = []
-    breakdown  = {}
-    score      = 0.0
+    feedback  = []
+    breakdown = {}
+    score     = 0.0
 
-    # ── Case 1: No TDS applicable (below threshold) ──────────────────
+    # Case 1: No TDS applicable
     if not ground_truth["tds_applicable"]:
         correct = (submitted_amount == 0.0 or no_tds_flag)
-        if correct:
-            score = 1.0
-            feedback.append("✓ Correctly identified: no TDS applicable (below threshold).")
-        else:
-            score = 0.0
-            feedback.append(
-                f"✗ No TDS required (below threshold). "
-                f"Submitted INR {submitted_amount:,.2f} — should be 0."
-            )
+        score = 0.999 if correct else 0.001
+        feedback.append(
+            "✓ Correctly identified: no TDS applicable (below threshold)."
+            if correct else
+            f"✗ No TDS required (below threshold). Submitted INR {submitted_amount:,.2f} — should be 0."
+        )
         breakdown["no_tds_correct"] = correct
-        score = round(min(max(score, 0.0), 1.0), 4)
-        return {"score": score, "correct": correct, "feedback": feedback, "breakdown": breakdown}
+        return {"score": _clamp(score), "correct": correct, "feedback": feedback, "breakdown": breakdown}
 
-    # ── Case 2: Inoperative PAN — must be 20% ────────────────────────
-    if not ground_truth["pan_valid"]:
+    goods = ground_truth.get("goods_amount", 0.0)
+    is_inop_pan = not ground_truth["pan_valid"]
+
+    # Task-specific weights that sum to 1.0
+    if task_id == "task_easy":
+        W_PAN, W_SECT, W_RATE, W_GOODS, W_AMOUNT = 0.0, 0.30, 0.30, 0.0, 0.40
+    elif task_id == "task_medium":
+        if goods > 0:
+            W_PAN, W_SECT, W_RATE, W_GOODS, W_AMOUNT = 0.0, 0.25, 0.15, 0.20, 0.40
+        else:
+            W_PAN, W_SECT, W_RATE, W_GOODS, W_AMOUNT = 0.0, 0.25, 0.15, 0.0, 0.60
+    elif task_id == "task_expert":
+        # Expert invoices are exclusively 194T (partner drawings) or 194Q (bulk goods).
+        # The decisive challenge is identifying the *section* — not computing the amount.
+        # Weights: section 0.40, rate 0.25, amount 0.35 (no inop-PAN in expert pool).
+        W_PAN, W_SECT, W_RATE, W_GOODS, W_AMOUNT = 0.0, 0.40, 0.25, 0.0, 0.35
+    else:  # task_hard only
+        if is_inop_pan:
+            if goods > 0:
+                W_PAN, W_SECT, W_RATE, W_GOODS, W_AMOUNT = 0.35, 0.10, 0.15, 0.10, 0.30
+            else:
+                W_PAN, W_SECT, W_RATE, W_GOODS, W_AMOUNT = 0.35, 0.10, 0.15, 0.0, 0.40
+        else:
+            if goods > 0:
+                W_PAN, W_SECT, W_RATE, W_GOODS, W_AMOUNT = 0.0, 0.20, 0.15, 0.20, 0.45
+            else:
+                W_PAN, W_SECT, W_RATE, W_GOODS, W_AMOUNT = 0.0, 0.20, 0.15, 0.0, 0.65
+
+    # Normalise to sum=1.0
+    total_w = W_PAN + W_SECT + W_RATE + W_GOODS + W_AMOUNT
+    if total_w > 0:
+        W_PAN /= total_w; W_SECT /= total_w; W_RATE /= total_w
+        W_GOODS /= total_w; W_AMOUNT /= total_w
+
+    # Case 2: Inoperative PAN
+    if is_inop_pan:
         pan_ok = abs(submitted_rate - 20.0) < 0.01
         breakdown["pan_inoperative_detected"] = pan_ok
         if pan_ok:
-            score += 0.40
+            score += W_PAN
             feedback.append("✓ Inoperative PAN detected — 20% rate applied.")
         else:
-            feedback.append(
-                f"✗ PAN is INOPERATIVE. Must apply 20% (Section 206AA). "
-                f"Submitted {submitted_rate}%."
-            )
+            feedback.append(f"✗ PAN is INOPERATIVE. Must apply 20% (Section 206AA). Submitted {submitted_rate}%.")
 
-    # ── Case 3: Section correct ───────────────────────────────────────
+    # Case 3: Section correct
     expected_section = ground_truth["section"]
     split = expected_section in ("SPLIT", "SPLIT_194J_194I")
     section_ok = (
@@ -74,73 +98,61 @@ def grade_submission(params: Dict[str, Any], ground_truth: Dict[str, Any]) -> Di
     )
     breakdown["section_correct"] = section_ok
     if section_ok:
-        score += 0.20
+        score += W_SECT
         feedback.append(f"✓ Section {submitted_section} is correct.")
     else:
         feedback.append(f"✗ Section wrong: submitted {submitted_section}, expected {expected_section}.")
 
-    # ── Case 4: Rate correct ──────────────────────────────────────────
+    # Case 4: Rate correct
     rate_ok = abs(submitted_rate - ground_truth["tds_rate_percent"]) < 0.01
     breakdown["rate_correct"] = rate_ok
     if rate_ok:
-        score += 0.10
+        score += W_RATE
         feedback.append(f"✓ Rate {submitted_rate}% is correct.")
     else:
-        feedback.append(
-            f"✗ Rate wrong: submitted {submitted_rate}%, "
-            f"expected {ground_truth['tds_rate_percent']}%."
-        )
+        feedback.append(f"✗ Rate wrong: submitted {submitted_rate}%, expected {ground_truth['tds_rate_percent']}%.")
 
-    # ── Case 5: Goods exclusion ───────────────────────────────────────
-    goods = ground_truth.get("goods_amount", 0.0)
+    # Case 5: Goods exclusion
     if goods > 0:
         goods_ok = submitted_amount <= ground_truth["taxable_amount"] + AMOUNT_TOLERANCE_INR
         breakdown["goods_excluded"] = goods_ok
         if goods_ok:
-            score += 0.10
+            score += W_GOODS
             feedback.append(f"✓ Goods (INR {goods:,.0f}) correctly excluded from TDS base.")
         else:
             feedback.append(f"✗ Goods (INR {goods:,.0f}) must be excluded — TDS on services only.")
 
-    # ── Case 6: Final amount ──────────────────────────────────────────
+    # Case 6: Final amount
     amount_ok = abs(submitted_amount - ground_truth["tds_amount_inr"]) <= AMOUNT_TOLERANCE_INR
     breakdown["amount_correct"] = amount_ok
     if amount_ok:
-        score += 0.40 if goods == 0 else 0.30
-        feedback.append(
-            f"✓ TDS amount INR {submitted_amount:,.2f} is CORRECT "
-            f"(expected INR {ground_truth['tds_amount_inr']:,.2f})."
-        )
+        score += W_AMOUNT
+        feedback.append(f"✓ TDS amount INR {submitted_amount:,.2f} is CORRECT (expected INR {ground_truth['tds_amount_inr']:,.2f}).")
     else:
-        feedback.append(
-            f"✗ TDS amount wrong: submitted INR {submitted_amount:,.2f}, "
-            f"correct is INR {ground_truth['tds_amount_inr']:,.2f}."
-        )
+        feedback.append(f"✗ TDS amount wrong: submitted INR {submitted_amount:,.2f}, correct is INR {ground_truth['tds_amount_inr']:,.2f}.")
 
-    correct = amount_ok and (section_ok or not ground_truth["pan_valid"])
-    score   = round(min(max(score, 0.0), 1.0), 4)  # guaranteed [0.0, 1.0], no float jitter
-
-    return {"score": score, "correct": correct, "feedback": feedback, "breakdown": breakdown}
+    correct = amount_ok and (section_ok or is_inop_pan)
+    return {"score": _clamp(score), "correct": correct, "feedback": feedback, "breakdown": breakdown}
 
 
 def grade_easy(params: Dict[str, Any], ground_truth: Dict[str, Any]) -> float:
-    """Grader for task_easy. Returns score in [0.0, 1.0]."""
-    return grade_submission(params, ground_truth)["score"]
+    """Grader for task_easy — weights: section=0.30, rate=0.30, amount=0.40."""
+    return grade_submission(params, ground_truth, task_id="task_easy")["score"]
 
 
 def grade_medium(params: Dict[str, Any], ground_truth: Dict[str, Any]) -> float:
-    """Grader for task_medium. Returns score in [0.0, 1.0]."""
-    return grade_submission(params, ground_truth)["score"]
+    """Grader for task_medium — adds goods-exclusion weight."""
+    return grade_submission(params, ground_truth, task_id="task_medium")["score"]
 
 
 def grade_hard(params: Dict[str, Any], ground_truth: Dict[str, Any]) -> float:
-    """Grader for task_hard. Returns score in [0.0, 1.0]."""
-    return grade_submission(params, ground_truth)["score"]
+    """Grader for task_hard — inop-PAN detection heavily weighted (0.35)."""
+    return grade_submission(params, ground_truth, task_id="task_hard")["score"]
 
 
 def grade_expert(params: Dict[str, Any], ground_truth: Dict[str, Any]) -> float:
-    """Grader for task_expert. Returns score in [0.0, 1.0]."""
-    return grade_submission(params, ground_truth)["score"]
+    """Grader for task_expert — section heavily weighted (0.40): 194T/194Q identification is the core challenge."""
+    return grade_submission(params, ground_truth, task_id="task_expert")["score"]
 
 
 # Map task_id → grader function
