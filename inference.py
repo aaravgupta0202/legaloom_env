@@ -378,7 +378,11 @@ def main() -> None:
             file=sys.stderr,
         )
     avg = sum(r["score"] for r in results) / len(results)
-    print(f"  Average score: {avg:.3f}", file=sys.stderr)
+    if (avg>=0.5):
+        final_output=1
+    else:
+        final_output=0
+    print(f"  Average score: {final_output}", file=sys.stderr)
 
 
 if __name__ == "__main__":
