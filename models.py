@@ -6,7 +6,7 @@ that the agent, server, and client all share.
 
 from typing import Any, Dict, List, Optional
 from openenv.core.env_server.types import Action, Observation, State
-from pydantic import Field
+from pydantic import Field, field_validator
 
 
 # ---------------------------------------------------------------------------
@@ -67,6 +67,25 @@ class TDSObservation(Observation):
         default=0.0,
         description="Reward for this step. Always a float (0.0 when no reward).",
     )
+
+    @field_validator("reward", mode="before")
+    @classmethod
+    def clamp_reward(cls, v: float) -> float:
+        """
+        Enforce hackathon Phase 2 rule at the model level:
+        Episode-ending rewards must be strictly in (0, 1) — never 0.0, never 1.0.
+
+        Clamping rules:
+          v == 0.0        → 0.0   (normal no-reward step — left alone)
+          v < 0           → v     (penalty steps like -0.05 — left alone)
+          0 < v < 0.001   → 0.001 (too small, floor it)
+          0.001 ≤ v ≤ 0.999 → v  (already in range)
+          v > 0.999       → 0.999 (cap — catches the reward=1.0 case)
+        """
+        v = float(v)
+        if v > 0.0:                     # only clamp positive rewards
+            v = round(min(max(v, 0.001), 0.999), 4)
+        return v
 
     # The invoice text — populated on first read_invoice action
     invoice_text: str = Field(
