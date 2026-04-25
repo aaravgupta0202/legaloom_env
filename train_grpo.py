@@ -31,9 +31,36 @@ from models import TDSAction
 
 
 SYSTEM_PROMPT = """You are an expert Indian TDS (Tax Deducted at Source) compliance agent, FY 2025-26.
+
+You will be given a vendor invoice. Output the COMPLETE sequence of JSON actions
+needed to solve the task, one JSON object per line. End with submit_answer.
+
+ACTIONS (in order):
+1. {"action_type": "read_invoice", "parameters": {}}
+2. {"action_type": "check_pan", "parameters": {"pan": "<10-char PAN from invoice>"}}
+3. {"action_type": "query_ytd", "parameters": {"pan": "<same PAN>"}}
+4. {"action_type": "lookup_section", "parameters": {"description": "<service from invoice>"}}
+5. {"action_type": "submit_answer", "parameters": {"tds_amount_inr": <number>, "section": "<194J|194C|194I|194H|194T|194Q>", "rate_percent": <number>}}
+
+RULES (FY 2025-26):
+- INOPERATIVE PAN → rate = 20% flat (Section 206AA), overrides everything
+- 194J Professional 10% (legal/CA/audit, individual/LLP) | 194J Technical 2% (Pvt Ltd vendor)
+- 194C Contractor 2% (security/catering/manpower) | 194I Rent 10% (building) or 2% (machinery)
+- 194H Commission 2% | 194T Partner 10% (NEW) | 194Q Goods 0.1%
+- Below threshold: submit {"tds_amount_inr": 0.0, "no_tds": "true", "section": "<sec>", "rate_percent": 0.0}
+  Thresholds: 194J 50K | 194C 30K single/1L year | 194I 6L | 194H 20K
+- GST on separate line → TDS on pre-GST. GST bundled → TDS on full amount.
+
+OUTPUT: 4-5 JSON objects, one per line, ending with submit_answer. No markdown, no commentary."""
+
+
+# Multi-turn rollout uses a different prompt style — one action per turn.
+# This is used by rollout_episode (baseline measurement, post-training eval)
+# where the model sees env feedback between actions.
+ROLLOUT_SYSTEM_PROMPT = """You are an expert Indian TDS (Tax Deducted at Source) compliance agent, FY 2025-26.
 Read a vendor invoice and compute the exact TDS deduction in INR.
 
-OUTPUT FORMAT: Each turn output ONLY a valid JSON object. No markdown, no explanation.
+OUTPUT: Each turn output ONLY a single valid JSON object. No markdown, no commentary.
 
 ACTIONS:
 1. {"action_type": "read_invoice", "parameters": {}}
@@ -43,22 +70,18 @@ ACTIONS:
 5. {"action_type": "check_threshold", "parameters": {"section": "194I", "amount": 65000}}
 6. {"action_type": "query_law", "parameters": {"section": "194J"}}
 7. {"action_type": "submit_answer", "parameters": {"tds_amount_inr": 6500.0, "section": "194I", "rate_percent": 10.0}}
-No TDS: {"action_type": "submit_answer", "parameters": {"tds_amount_inr": 0.0, "no_tds": "true", "section": "194I", "rate_percent": 0.0}}
 
-RULE 1 — INOPERATIVE PAN: check_pan returns INOPERATIVE → rate = 20% flat (Section 206AA)
-RULE 2 — GST: GST on separate line → TDS on pre-GST. GST bundled → TDS on full amount.
-RULE 3 — Mixed invoices: Goods/hardware → NO TDS on that portion.
-RULE 4 — Thresholds: 194J: 50K/yr | 194C: 30K single / 1L annual | 194I: 6L/yr | 194H: 20K/yr
-RULE 5 — Company vs Individual: Pvt Ltd → 194J Technical 2%. Individual/LLP → 194J Professional 10%.
+RULES (FY 2025-26):
+- INOPERATIVE PAN → rate = 20% flat (Section 206AA)
+- 194J Professional 10% (legal/CA, individual/LLP) | 194J Technical 2% (Pvt Ltd)
+- 194C Contractor 2% | 194I Rent 10% (building) or 2% (machinery)
+- 194H Commission 2% | 194T Partner 10% (NEW) | 194Q Goods 0.1%
+- Below threshold: tds_amount_inr=0.0, no_tds="true"
+  Thresholds: 194J 50K | 194C 30K single/1L year | 194I 6L | 194H 20K
 
-STRATEGY:
-Step 1: read_invoice
-Step 2: check_pan ← ALWAYS. If INOPERATIVE → submit with rate=20%
-Step 3: lookup_section
-Step 4: check_threshold (if near section limit)
-Step 5: submit_answer
+STRATEGY: read_invoice → check_pan → lookup_section (or query_ytd) → submit_answer
 
-Output ONLY the JSON. Nothing else."""
+Output ONE action JSON per turn."""
 
 
 def _extract_action(text: str) -> Optional[Dict]:
@@ -110,7 +133,7 @@ def rollout_episode(
     obs = env.reset(task_id=task_id, seed=seed)
     trajectory = []
     conversation = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": ROLLOUT_SYSTEM_PROMPT},
     ]
 
     initial_context = (
@@ -242,20 +265,24 @@ def rollout_batch(
 
 def episode_reward_fn(prompts, completions, **kwargs) -> List[float]:
     """
-    GRPO-compatible reward function using FULL episode rollouts.
+    GRPO-compatible reward function using full episode rollouts in a single completion.
 
-    The model receives a prompt describing the task. It emits a SEQUENCE
-    of JSON actions separated by newlines (one per line). This function:
-    1. Parses that action sequence from the completion
-    2. Runs the full environment episode step-by-step
-    3. Returns ONLY the final terminal reward from submit_answer
-
-    This is honest multi-step RL: the model must produce the entire
-    reasoning chain, not just a single action. The trainer does NOT
-    inject read_invoice or check_pan — the model must emit them itself.
-
-    Anti-hacking: no format bonus, no per-step free reward. Only the
-    final grader score from submit_answer counts.
+    The model emits a SEQUENCE of JSON actions in one completion. This function:
+    1. Parses every JSON action block from the completion
+    2. Replays them step-by-step in a fresh environment
+    3. Computes a graded reward:
+       - Full terminal reward if submit_answer was reached (the goal)
+       - Partial credit based on valid action progress otherwise
+    
+    The partial credit creates reward variance even when the model fails to
+    complete the episode, giving GRPO a learning signal. The model is still
+    incentivized to reach submit_answer because that pays much more.
+    
+    Anti-hacking guards:
+    - Workflow violations (e.g. submit before check_pan) get clamped low
+    - Repeated identical actions don't accumulate reward
+    - Invalid JSON or unknown actions count as 0 progress
+    - Maximum partial credit is capped well below true success
     """
     task_id = kwargs.get("task_id", "task_easy")
     base_seed = kwargs.get("seed", 42)
@@ -263,40 +290,67 @@ def episode_reward_fn(prompts, completions, **kwargs) -> List[float]:
 
     for i, completion in enumerate(completions):
         text = completion[0]["content"] if isinstance(completion, list) else str(completion)
-        seed = base_seed + i  # Each generation gets a slightly different episode
+        seed = base_seed + i
 
         try:
             env = LegaloomEnvironment()
             env.reset(task_id=task_id, seed=seed)
 
-            # Parse ALL JSON actions from the completion (one per line or block)
             import re as _re
             action_blocks = _re.findall(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)?\}', text, _re.DOTALL)
 
-            final_reward = 0.05
+            final_reward = 0.01
             submitted = False
+            valid_actions_taken = 0
+            distinct_action_types = set()
+            cumulative_step_reward = 0.0
 
             for block in action_blocks:
                 try:
                     action_dict = json.loads(block)
-                    action_type = action_dict.get("action_type", "")
-                    params = action_dict.get("parameters", {})
-                    if not action_type:
-                        continue
-                    result = env.step(TDSAction(action_type=action_type, parameters=params))
-                    if result.done:
-                        final_reward = clamp_score(float(result.reward))
-                        submitted = True
-                        break
-                except (json.JSONDecodeError, Exception):
+                except json.JSONDecodeError:
                     continue
 
-            # If model never submitted, give minimum reward
+                action_type = action_dict.get("action_type", "")
+                params = action_dict.get("parameters", {})
+                if not action_type:
+                    continue
+
+                try:
+                    result = env.step(TDSAction(action_type=action_type, parameters=params))
+                except Exception:
+                    continue
+
+                step_r = float(result.reward) if result.reward is not None else 0.0
+
+                # Only count constructive progress (positive step rewards from env)
+                if step_r > 0:
+                    valid_actions_taken += 1
+                    distinct_action_types.add(action_type)
+                    cumulative_step_reward += step_r
+
+                if result.done:
+                    # Episode reached submit_answer — terminal grader score is authoritative
+                    final_reward = clamp_score(float(result.reward))
+                    submitted = True
+                    break
+
             if not submitted:
-                final_reward = 0.01  # SCORE_MIN
+                # Partial credit: model made valid progress but never submitted.
+                # This creates GRPO advantage signal between completions that
+                # got further vs ones that didn't. Capped at 0.40 — well below
+                # the 0.5 success threshold and below typical correct submission scores.
+                progress_score = (
+                    0.05                                                   # base for any valid action
+                    + 0.05 * min(valid_actions_taken, 4)                   # cap progress reward
+                    + 0.04 * min(len(distinct_action_types), 4)            # diversity bonus
+                    + min(cumulative_step_reward, 0.20)                    # raw env step rewards
+                )
+                final_reward = min(progress_score, 0.40)
+                final_reward = max(final_reward, 0.01)  # never below SCORE_MIN
 
         except Exception:
-            final_reward = 0.01  # SCORE_MIN
+            final_reward = 0.01
 
         rewards.append(final_reward)
 
@@ -304,7 +358,13 @@ def episode_reward_fn(prompts, completions, **kwargs) -> List[float]:
 
 
 def build_training_dataset(task_ids=None, examples_per_task=20, base_seed=42):
-    """Build training prompts from environment resets."""
+    """Build training prompts from environment resets.
+    
+    The prompt includes the FULL invoice text so the model can reason
+    about it offline. The model emits the complete action sequence
+    (read_invoice → check_pan → lookup_section → submit_answer) in one
+    completion, separated by newlines.
+    """
     from datasets import Dataset
 
     if task_ids is None:
@@ -315,15 +375,14 @@ def build_training_dataset(task_ids=None, examples_per_task=20, base_seed=42):
         for i in range(examples_per_task):
             seed = base_seed + i + hash(task_id) % 1000
             try:
-                task = sample_task(task_id, seed=seed, use_procedural=True)  # Procedural prevents memorization
-                obs_text = task.get("invoice_text", "")[:400] if task.get("invoice_text") else ""
+                task = sample_task(task_id, seed=seed, use_procedural=True)
+                # Include the FULL invoice text so the model can reason about it
+                invoice_text = task.get("invoice_text", "")[:1500]
                 prompt_text = (
-                    f"Task: {task_id}\n"
-                    f"Difficulty: {task['difficulty']}\n"
-                    f"Invoice: {task['invoice_id']}\n"
-                    f"Max steps: {task['max_steps']}\n"
-                    f"Start with read_invoice.\n\n"
-                    f"Output your action as JSON:"
+                    f"INVOICE:\n{invoice_text}\n\n"
+                    f"Solve this TDS compliance task. Output the COMPLETE sequence of "
+                    f"JSON actions (one per line), ending with submit_answer.\n\n"
+                    f"Output the action sequence now:"
                 )
                 examples.append({
                     "task_id": task_id,
@@ -415,8 +474,8 @@ def run_training(
         per_device_train_batch_size=2,
         gradient_accumulation_steps=4,
         num_generations=4,
-        max_prompt_length=512,
-        max_completion_length=256,
+        max_prompt_length=1536,  # Invoice text is up to ~1500 chars
+        max_completion_length=768,  # Need ~4 JSON action blocks × ~150 tokens each
         beta=0.01,
         logging_steps=1,
         max_steps=num_steps,
