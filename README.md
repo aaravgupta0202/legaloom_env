@@ -1,3 +1,20 @@
+---
+title: LegaLoom-Env
+emoji: ⚖️
+colorFrom: blue
+colorTo: green
+sdk: docker
+pinned: false
+tags:
+  - openenv
+  - reinforcement-learning
+  - tax-compliance
+  - india
+  - tds
+  - world-modeling
+license: mit
+---
+
 # LegaLoom-Env — TDS Compliance RL Environment
 
 **Theme: World Modeling — Professional Tasks (Theme #3.1)**
@@ -80,28 +97,43 @@ All scores clamped to `(0.01, 0.99)` — full 0 and full 1 excluded to keep grad
 
 ---
 
+
+## Reward Hacking Audit
+
+Before training, we red-teamed our own reward function and found three exploits. Here's what we found and how we patched each one.
+
+**Exploit 1 — Hint leak (fixed)**
+The environment was telling the agent the next correct tool call via the `hint` field in observations. A 3-line agent that just reads the hint string would beat any untrained LLM on easy tasks. The "multi-step reasoning" claim was false.
+Fix: `hint_enabled=False` for all four task pools. The agent must read the invoice and plan the tool sequence independently.
+
+**Exploit 2 — Trainer impersonation (fixed)**
+The GRPO reward function was injecting `read_invoice` and `check_pan` itself (using ground-truth vendor PAN from `env._task["vendor_pan"]`), then scoring only the model's `submit_answer`. The gradient was teaching "emit submit_answer immediately; the trainer will do the reasoning for you."
+Fix: `episode_reward_fn` now parses the model's full action sequence and replays it verbatim. The trainer injects nothing. Only the terminal reward counts.
+
+**Exploit 3 — Evidence-free `no_tds` claim (fixed)**
+Submitting `no_tds=true` with `tds_amount_inr=0.0` (claiming below-threshold) scored 0.99 with zero evidence. Any model could achieve this trivially.
+Fix: `no_tds=true` without a prior `query_ytd` call incurs a −0.30 penalty. The model must demonstrate it checked the YTD accumulation before claiming below-threshold.
+
 ## Results
 
-### Baseline (llama-3.1-8b-instant, no training)
+### Baseline (Qwen2.5-3B-Instruct, untrained)
 
-Baseline measured by running `inference.py` with the minimal system prompt (action contract only, no worked examples):
+Measured via `rollout_episode` in `LegaLoom_GRPO_Training.ipynb` — untrained Qwen2.5-3B, same prompt as training, no hints, no worked examples. Scores pending the onsite training run.
 
-| Task | Baseline Score |
-|------|---------------|
-| task_easy | ~0.18 |
-| task_medium | ~0.15 |
-| task_hard | ~0.09 |
-| task_expert | ~0.05 |
-| **Average** | **~0.12** |
+| Task | Baseline | After GRPO |
+|------|----------|-----------|
+| task_easy | *(run notebook)* | *(run notebook)* |
+| task_medium | *(run notebook)* | *(run notebook)* |
+| task_hard | *(run notebook)* | *(run notebook)* |
+| task_expert | *(run notebook)* | *(run notebook)* |
 
 ### After GRPO Training
 
 > Training runs onsite with HuggingFace compute credits (April 25–26).
 > Real reward curves and before/after scores will be committed here after training completes.
 
-![Reward Curves](reward_curves.png)
-
-*This plot will be replaced with real training output from `train_grpo.py` after the onsite training run.*
+> **Reward curves will be added here after the onsite training run (April 25–26).**
+> Run `LegaLoom_GRPO_Training.ipynb` in Colab to generate real curves.
 
 ---
 

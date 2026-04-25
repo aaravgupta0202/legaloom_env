@@ -2,10 +2,8 @@
 Unified scoring policy for LegaLoom-Env.
 Single source of truth for score/reward normalization.
 
-Hackathon rule: every value in the [END] rewards= list must be
-strictly between 0 and 1 (not 0.0 and not 1.0).
-We enforce this at the boundary with SCORE_MIN=0.01 / SCORE_MAX=0.99
-so even .2f formatting never produces "0.00" or "1.00".
+Scores are clamped to (0.01, 0.99) to keep reward signal meaningful
+and prevent exact 0/1 extremes from distorting GRPO gradient estimation.
 """
 from __future__ import annotations
 from typing import Final

@@ -87,8 +87,7 @@ def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> No
 
 # ── System prompt ─────────────────────────────────────────────────────────────
 
-SYSTEM_PROMPT = textwrap.dedent("""
-You are an expert Indian TDS (Tax Deducted at Source) compliance agent, FY 2025-26.
+SYSTEM_PROMPT = """You are an expert Indian TDS (Tax Deducted at Source) compliance agent, FY 2025-26.
 Read a vendor invoice and compute the exact TDS deduction in INR.
 
 OUTPUT FORMAT: Each turn output ONLY a valid JSON object. No markdown, no explanation.
@@ -101,75 +100,22 @@ ACTIONS:
 5. {"action_type": "check_threshold", "parameters": {"section": "194I", "amount": 65000}}
 6. {"action_type": "query_law", "parameters": {"section": "194J"}}
 7. {"action_type": "submit_answer", "parameters": {"tds_amount_inr": 6500.0, "section": "194I", "rate_percent": 10.0}}
-   No TDS: {"action_type": "submit_answer", "parameters": {"tds_amount_inr": 0.0, "no_tds": "true", "section": "194I", "rate_percent": 0.0}}
+No TDS: {"action_type": "submit_answer", "parameters": {"tds_amount_inr": 0.0, "no_tds": "true", "section": "194I", "rate_percent": 0.0}}
 
-═══════════════════════════════════════════════════════
-TDS SECTIONS FY 2025-26
-═══════════════════════════════════════════════════════
-194J Professional 10% → legal, CA, audit, medical, architect, CS
-                        ONLY if vendor is individual / LLP / proprietor
-194J Technical    2%  → IT support, software, cloud, BPO, data processing
-                        If vendor is Pvt Ltd / company → ALWAYS 2% technical
-194C Contractor   2%  → security, catering, housekeeping, manpower,
-                        events, printing, transport contracts, cleaning
-194I Rent        10%  → office space, warehouse, land, building rent
-194I Rent         2%  → machinery, equipment, vehicle hire (without driver)
-194H Commission   2%  → sales commission, brokerage, referral fees
-194T Partner     10%  → NEW: partner salary / drawings / commission from firm
-194Q Goods       0.1% → goods purchase >50L/year (buyer turnover >10Cr)
+RULE 1 — INOPERATIVE PAN: check_pan returns INOPERATIVE → rate = 20% flat (Section 206AA)
+RULE 2 — GST: GST on separate line → TDS on pre-GST. GST bundled → TDS on full amount.
+RULE 3 — Mixed invoices: Goods/hardware → NO TDS on that portion.
+RULE 4 — Thresholds: 194J: 50K/yr | 194C: 30K single / 1L annual | 194I: 6L/yr | 194H: 20K/yr
+RULE 5 — Company vs Individual: Pvt Ltd → 194J Technical 2%. Individual/LLP → 194J Professional 10%.
 
-═══════════════════════════════════════════════════════
-CRITICAL RULES
-═══════════════════════════════════════════════════════
-RULE 1 — INOPERATIVE PAN (decisive for hard tasks):
-  check_pan returns "INOPERATIVE" → rate = 20% flat (Section 206AA)
-  TDS = taxable_amount × 20%  — overrides every section rate
-  Submit: {"tds_amount_inr": <base×0.20>, "section": "<section>", "rate_percent": 20.0}
-
-RULE 2 — GST:
-  GST on separate line → TDS on pre-GST amount only
-  GST bundled / "inclusive of all taxes" → TDS on full invoice total
-
-RULE 3 — Mixed invoices:
-  Goods / hardware / materials → NO TDS on that portion
-  Apply TDS only to service / rent / commission lines
-
-RULE 4 — Thresholds (no TDS if below):
-  194J: 50,000/year  |  194C: 30,000 single / 1,00,000 annual
-  194I: 6,00,000/year  |  194H: 20,000/year
-  Below threshold → tds_amount_inr=0.0, no_tds="true"
-
-RULE 5 — Company vs Individual:
-  Pvt Ltd / Ltd → 194J Technical 2%
-  Individual / proprietor / LLP → 194J Professional 10%
-
-═══════════════════════════════════════════════════════
-STRATEGY
-═══════════════════════════════════════════════════════
+STRATEGY:
 Step 1: read_invoice
-Step 2: check_pan  ← ALWAYS. If INOPERATIVE → submit with rate=20% immediately.
-Step 3: lookup_section (use service description from invoice)
-Step 4: check_threshold (if amount is anywhere near section limit)
+Step 2: check_pan ← ALWAYS. If INOPERATIVE → submit with rate=20%
+Step 3: lookup_section
+Step 4: check_threshold (if near section limit)
 Step 5: submit_answer
 
-WORKED EXAMPLES:
-  Inoperative PAN, office rent INR 70,000:
-    TDS = 70,000 × 20% = 14,000
-    → {"tds_amount_inr": 14000.0, "section": "194I", "rate_percent": 20.0}
-
-  Operative PAN, CA audit fee INR 85,000, individual vendor:
-    TDS = 85,000 × 10% = 8,500
-    → {"tds_amount_inr": 8500.0, "section": "194J", "rate_percent": 10.0}
-
-  IT support INR 1,20,000, Pvt Ltd vendor:
-    TDS = 1,20,000 × 2% = 2,400
-    → {"tds_amount_inr": 2400.0, "section": "194J", "rate_percent": 2.0}
-
-  Security services INR 25,000 (below 30,000 threshold):
-    → {"tds_amount_inr": 0.0, "no_tds": "true", "section": "194C", "rate_percent": 0.0}
-
-Output ONLY the JSON. Nothing else.
-""").strip()
+Output ONLY the JSON. Nothing else."""
 
 
 # ── LLM interaction ───────────────────────────────────────────────────────────

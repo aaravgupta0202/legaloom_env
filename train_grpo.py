@@ -293,10 +293,10 @@ def episode_reward_fn(prompts, completions, **kwargs) -> List[float]:
 
             # If model never submitted, give minimum reward
             if not submitted:
-                final_reward = 0.05
+                final_reward = 0.01  # SCORE_MIN
 
         except Exception:
-            final_reward = 0.05
+            final_reward = 0.01  # SCORE_MIN
 
         rewards.append(final_reward)
 
@@ -315,7 +315,7 @@ def build_training_dataset(task_ids=None, examples_per_task=20, base_seed=42):
         for i in range(examples_per_task):
             seed = base_seed + i + hash(task_id) % 1000
             try:
-                task = sample_task(task_id, seed=seed)
+                task = sample_task(task_id, seed=seed, use_procedural=True)  # Procedural prevents memorization
                 obs_text = task.get("invoice_text", "")[:400] if task.get("invoice_text") else ""
                 prompt_text = (
                     f"Task: {task_id}\n"
