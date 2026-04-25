@@ -128,7 +128,7 @@ Qwen2.5-3B-Instruct + LoRA (r=16) via Unsloth. **40 GRPO steps total** — 20 on
 
 ### Why `task_medium` regressed
 
-Training on easy + hard pulled the policy toward inoperative-PAN detection, which over-triggers on threshold-boundary scenarios in medium. The average lift is −7% — honestly negative. With a 4-phase curriculum covering all tasks and more compute, we'd expect medium to stabilize. The 4-phase notebook (`LegaLoom_FullCurriculum.ipynb`) addresses this.
+Training on easy + hard pulled the policy toward inoperative-PAN detection, which over-triggers on threshold-boundary scenarios in medium. The average lift is −7% — honestly negative. With more compute and a broader curriculum, we'd expect medium to stabilize.
 
 ### Reward curves
 
@@ -143,7 +143,7 @@ Raw artifacts: [`training_scores.json`](./training_scores.json), [`training_log.
 ## Known Limitations
 
 - **50% of Phase 1 GRPO steps had zero reward variance** — all 4 generations scored identically. DPO warmup or higher `num_generations` (8 instead of 4) would address this.
-- **Training narrowly on easy + hard caused medium to regress.** A 4-phase curriculum would help; the notebook includes this option.
+- **Training narrowly on easy + hard caused medium to regress.** A broader curriculum with more compute would help.
 - **Single-shot completion API** — the model emits the full action sequence in one generation without environment feedback between actions. A multi-turn rollout loop would improve, but doesn't fit TRL's prompt→completion API cleanly.
 - **5-episode evaluations have ~0.18 standard error.** A production evaluation would use 30+ episodes per task for tighter confidence.
 
@@ -169,7 +169,7 @@ See [`train_grpo.py`](./train_grpo.py) for the full pipeline.
 | Resource | Link |
 |---------|------|
 | 🤗 HuggingFace Space | [aarav0202/legaloom-env](https://huggingface.co/spaces/aarav0202/legaloom-env) |
-| 📓 Training Notebook | [`LegaLoom_FullCurriculum.ipynb`](./LegaLoom_FullCurriculum.ipynb) — 4-phase GRPO, Colab T4 |
+| 📓 Training Notebook | [`LegaLoom_FullCurriculum.ipynb`](./LegaLoom_FullCurriculum.ipynb) — 2-phase GRPO, Colab T4 |
 | 📓 Training Script | [`train_grpo.py`](./train_grpo.py) |
 | 📝 Blog Post | [`blog_post.md`](./blog_post.md) |
 
@@ -220,7 +220,7 @@ docker run -p 7860:7860 legaloom-env
 legaloom_env/
 ├── inference.py                      # Baseline agent (Round 1)
 ├── train_grpo.py                     # GRPO training pipeline
-├── LegaLoom_FullCurriculum.ipynb     # 4-phase training notebook (Colab)
+├── LegaLoom_FullCurriculum.ipynb     # Training notebook (Colab T4)
 ├── models.py                         # Pydantic typed models
 ├── openenv.yaml                      # OpenEnv manifest
 ├── Dockerfile                        # Container

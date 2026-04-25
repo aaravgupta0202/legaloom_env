@@ -231,26 +231,6 @@ def rollout_batch(
     return results
 
 
-def _shaped_reward(final_reward: float, trajectory: list, submitted: bool) -> float:
-    if submitted and final_reward > 0.5:
-        return final_reward
-
-    if submitted:
-        return final_reward * 0.8 + 0.15
-
-    has_read = any(t.get("action", {}).get("action_type") == "read_invoice" for t in trajectory if t.get("action"))
-    has_pan = any(t.get("action", {}).get("action_type") == "check_pan" for t in trajectory if t.get("action"))
-    has_section = any(t.get("action", {}).get("action_type") == "lookup_section" for t in trajectory if t.get("action"))
-
-    if has_read and has_pan and has_section:
-        return 0.15
-    elif has_read and has_pan:
-        return 0.10
-    elif has_read:
-        return 0.06
-    return 0.02
-
-
 def episode_reward_fn(prompts, completions, **kwargs) -> List[float]:
     task_id = kwargs.get("task_id", "task_easy")
     base_seed = kwargs.get("seed", 42)
@@ -287,13 +267,10 @@ def episode_reward_fn(prompts, completions, **kwargs) -> List[float]:
                 except (json.JSONDecodeError, Exception):
                     continue
 
-            shaped = _shaped_reward(final_reward, trajectory_steps, submitted)
-            shaped = clamp_score(shaped)
+            rewards.append(clamp_score(final_reward))
 
         except Exception:
-            shaped = 0.01
-
-        rewards.append(shaped)
+            rewards.append(0.01)
 
     return rewards
 
