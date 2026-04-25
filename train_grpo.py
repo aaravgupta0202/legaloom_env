@@ -173,16 +173,34 @@ def rollout_episode(
         action_dict = _extract_action(generated)
 
         if action_dict is None:
-            trajectory.append({
-                "step": step,
-                "generated": generated[:200],
-                "action": None,
-                "reward": 0.05,
-                "error": "no_valid_json",
-            })
-            final_reward = 0.05
-            steps_used = step
-            break
+            # Try a more permissive extraction — sometimes model adds prose
+            # around the JSON or wraps it in markdown
+            import re as _re
+            for pat in [r"```json\s*(\{.*?\})\s*```", r"```\s*(\{.*?\})\s*```", r"(\{[^{}]*(?:\{[^{}]*\}[^{}]*)?\})"]:
+                m = _re.search(pat, generated, _re.DOTALL)
+                if m:
+                    try:
+                        action_dict = json.loads(m.group(1) if m.lastindex else m.group())
+                        break
+                    except Exception:
+                        continue
+            if action_dict is None:
+                trajectory.append({
+                    "step": step,
+                    "generated": generated[:200],
+                    "action": None,
+                    "reward": 0.05,
+                    "error": "no_valid_json",
+                })
+                # Don't break — let the episode keep trying.
+                # If we never get a valid action, we'll exhaust max_steps.
+                conversation.append({"role": "assistant", "content": generated})
+                conversation.append({"role": "user", "content":
+                    "Your output was not valid JSON. Output exactly one JSON object: "
+                    "{\"action_type\": \"...\", \"parameters\": {...}}"
+                })
+                steps_used = step
+                continue
 
         action_type = action_dict.get("action_type", "")
         params = action_dict.get("parameters", {})
@@ -207,8 +225,12 @@ def rollout_episode(
                 break
 
             conversation.append({"role": "assistant", "content": generated})
+            # Include the invoice text once after read_invoice succeeds
+            invoice_block = ""
+            if action_type == "read_invoice" and result.invoice_text:
+                invoice_block = f"\nINVOICE:\n{result.invoice_text[:1500]}\n"
             obs_text = (
-                f"Step {step} result: {result.action_result[:300]}\n"
+                f"Step {step} result: {result.action_result[:300]}{invoice_block}\n"
                 f"Available: {result.available_actions}\n"
                 f"Steps used: {result.steps_used}/{result.max_steps}\n\n"
                 f"Output your next action as JSON:"
