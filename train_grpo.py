@@ -62,7 +62,7 @@ Output ONLY the JSON. Nothing else."""
 
 
 def _extract_action(text: str) -> Optional[Dict]:
-    match = re.search(r'\{[^{}]+\}', text, re.DOTALL)
+    match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)?\}', text, re.DOTALL)
     if not match:
         return None
     try:
@@ -271,7 +271,7 @@ def episode_reward_fn(prompts, completions, **kwargs) -> List[float]:
 
             # Parse ALL JSON actions from the completion (one per line or block)
             import re as _re
-            action_blocks = _re.findall(r'\{[^{}]+\}', text, _re.DOTALL)
+            action_blocks = _re.findall(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)?\}', text, _re.DOTALL)
 
             final_reward = 0.05
             submitted = False
