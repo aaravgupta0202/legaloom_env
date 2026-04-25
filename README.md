@@ -116,24 +116,41 @@ Fix: `no_tds=true` without a prior `query_ytd` call incurs a −0.30 penalty. Th
 
 ## Results
 
-### Baseline (Qwen2.5-3B-Instruct, untrained)
+### Setup
 
-Measured via `rollout_episode` in `LegaLoom_GRPO_Training.ipynb` — untrained Qwen2.5-3B, same prompt as training, no hints, no worked examples. Scores pending the onsite training run.
+Qwen2.5-3B-Instruct + LoRA (r=16) via Unsloth. **40 GRPO steps total** — 20 on `task_easy` then 20 on `task_hard`. Procedural invoice generation enabled, hints disabled across all four tasks, full episode rollouts (no trainer injection). Each before/after cell below is the average of 5 fresh-seed episodes per task using `rollout_episode` in `LegaLoom_GRPO_Training.ipynb` — same model, same prompt, same procedural distribution for both measurements.
 
-| Task | Baseline | After GRPO |
-|------|----------|-----------|
-| task_easy | *(run notebook)* | *(run notebook)* |
-| task_medium | *(run notebook)* | *(run notebook)* |
-| task_hard | *(run notebook)* | *(run notebook)* |
-| task_expert | *(run notebook)* | *(run notebook)* |
+### Before vs After GRPO
 
-### After GRPO Training
+![Before vs After GRPO](./before_after.png)
 
-> Training runs onsite with HuggingFace compute credits (April 25–26).
-> Real reward curves and before/after scores will be committed here after training completes.
+| Task | Baseline | After GRPO | Δ |
+|------|---------:|-----------:|------:|
+| `task_easy` | 0.186 | **0.324** | +74% |
+| `task_medium` | 0.450 | 0.336 | −25% |
+| `task_hard` | 0.078 | **0.126** | +62% |
+| `task_expert` | 0.200 | **0.316** | +58% |
+| **Average** | **0.229** | **0.276** | **+21%** |
 
-> **Reward curves will be added here after the onsite training run (April 25–26).**
-> Run `LegaLoom_GRPO_Training.ipynb` in Colab to generate real curves.
+Three of four difficulty levels improved. The largest absolute gain is on `task_easy` (+0.138); the largest relative gain is on `task_hard` (+62%) — the inoperative-PAN scenarios that motivated the project.
+
+### Why `task_medium` regressed
+
+`task_medium` was **not** in the training curriculum. We trained on easy → hard, then evaluated on all four tasks. The policy that learned to detect inoperative PANs (a `task_hard` signal) appears to over-trigger on threshold-boundary scenarios in medium that don't need it, dropping the score from 0.450 to 0.336. With more compute we would interleave medium into the curriculum rather than skip it. We are reporting this as-is — the regression is on the plot and in the table.
+
+### Reward curves
+
+![GRPO Reward Curves](./reward_curves.png)
+
+Both phases show noisy step-reward signal hovering around 0.05–0.20 with intermittent spikes. The curves are not dramatic — 40 steps on a 3B LoRA is a small budget. What changed during training was the underlying behavior the optimizer could grip onto:
+
+- `completion_length` rose from a degenerate ~14 tokens to 43–131 tokens (the model started emitting full action sequences instead of stub completions)
+- `reward_std` across each GRPO group rose from 0.000 to 0.260 (genuine variance for the optimizer to exploit)
+- Per-step reward spikes to ~0.19 vs a baseline floor of 0.01
+
+The headline reward number staying low is expected at this compute budget. The lift shows up at evaluation time, on held-out seeds — which is what the table above captures.
+
+Raw artifacts: [`training_scores.json`](./training_scores.json), [`training_log.json`](./training_log.json).
 
 ---
 

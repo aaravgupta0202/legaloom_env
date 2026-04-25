@@ -1,0 +1,14 @@
+{
+  "baseline": {
+    "task_easy": 0.186,
+    "task_medium": 0.45,
+    "task_hard": 0.078,
+    "task_expert": 0.2
+  },
+  "trained": {
+    "task_easy": 0.324,
+    "task_medium": 0.336,
+    "task_hard": 0.126,
+    "task_expert": 0.316
+  }
+}
