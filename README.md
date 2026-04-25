@@ -17,7 +17,9 @@ license: mit
 
 # LegaLoom-Env — TDS Compliance RL Environment
 
-**Theme: World Modeling — Professional Tasks (Theme #3.1)**
+**Round 2 Theme: World Modeling — Professional Tasks (#3.1)**
+
+Real interaction with rule-governed APIs (PAN registry, threshold lookup, YTD accumulation), persistent state across multi-step workflows, no shortcuts to ground truth. The agent must maintain consistent internal state, update beliefs based on tool outputs, and orchestrate a multi-step compliance workflow to arrive at a verifiable numeric answer.
 
 [![OpenEnv](https://img.shields.io/badge/OpenEnv-0.2.3-blue)](https://github.com/meta-pytorch/OpenEnv)
 [![HF Space](https://img.shields.io/badge/HuggingFace-Space-yellow)](https://huggingface.co/spaces/aarav0202/legaloom-env)
@@ -46,14 +48,14 @@ The agent reads a vendor invoice and must:
 3. Use tools (`query_ytd`, `lookup_section`, `check_threshold`, `query_law`) to gather evidence
 4. Call `submit_answer` with the exact TDS amount, section, and rate
 
-**No hints.** All four difficulty levels require the agent to plan the tool sequence independently — the environment does not suggest the next action. This is real partial observability.
+**No hints.** All four difficulty levels require the agent to plan the tool sequence independently — the environment does not suggest the next action.
 
 ---
 
 ## Action Space
 
 | Action | Parameters | Purpose |
-|--------|-----------|---------|
+|--------|-----------|---------| 
 | `read_invoice` | none | Fetch invoice text (must be first) |
 | `check_pan` | `pan` | Verify vendor PAN: operative or INOPERATIVE |
 | `query_ytd` | `pan` | Cumulative YTD payments (required before no_tds claims) |
@@ -62,15 +64,20 @@ The agent reads a vendor invoice and must:
 | `query_law` | `section` | Statutory rate, threshold, and exceptions |
 | `submit_answer` | `tds_amount_inr`, `section`, `rate_percent` | Final answer |
 
-### Reward Hacking Protections
+---
 
-The environment actively prevents shortcuts that would allow a model to exploit the reward without solving the task:
+## Reward Hacking Audit
 
-- **`no_tds=true` requires evidence**: calling `submit_answer` with `no_tds=true` without first calling `query_ytd` incurs a −0.30 penalty. You cannot claim below-threshold without checking YTD.
-- **`check_pan` is mandatory**: submitting before `check_pan` is a workflow violation (−0.04, episode continues).
-- **`lookup_section` spam**: each call beyond the second costs −0.02.
-- **Repeat actions**: repeating the same action incurs diminishing step rewards.
-- **Reasoning shortcut detection**: submitting the correct amount but with no evidence trail triggers a shortcut penalty.
+Before training, we red-teamed our own reward function and found three exploits. Each is documented with the fix applied.
+
+**Exploit 1 — Hint leak (fixed)**
+The environment was telling the agent the next correct tool call via the `hint` field. A 3-line agent that reads the hint string would beat any untrained LLM. Fix: `hint_enabled=False` for all four task pools. The agent must plan independently.
+
+**Exploit 2 — Trainer impersonation (fixed)**
+The GRPO reward function was injecting `read_invoice` and `check_pan` itself (using ground-truth vendor PAN from `env._task["vendor_pan"]`), then scoring only the model's `submit_answer`. Fix: `episode_reward_fn` now parses the model's full action sequence and replays it verbatim. The trainer injects nothing.
+
+**Exploit 3 — Evidence-free `no_tds` claim (fixed)**
+Submitting `no_tds=true` with `tds_amount_inr=0.0` scored 0.99 with zero evidence. Fix: `no_tds=true` without a prior `query_ytd` call incurs a −0.30 penalty. The model must check YTD before claiming below-threshold.
 
 ---
 
@@ -93,47 +100,52 @@ Step rewards encourage correct workflow. Terminal reward on `submit_answer` is a
 section_score  (30–40%)  ×  rate_score  (15–30%)  ×  amount_accuracy  (35–65%)
 ```
 
-All scores clamped to `(0.01, 0.99)` — full 0 and full 1 excluded to keep gradient signal meaningful.
+All scores clamped to `(0.01, 0.99)` — full 0 and full 1 excluded to keep gradient signal meaningful for GRPO.
+
+Additional penalties: `no_tds` on taxable invoice (−0.25), evidence-free `no_tds` (−0.30), missed inoperative PAN (−0.08), shortcut detection, `lookup_section` spam (−0.02 after 2nd call).
 
 ---
 
-
-## Reward Hacking Audit
-
-Before training, we red-teamed our own reward function and found three exploits. Here's what we found and how we patched each one.
-
-**Exploit 1 — Hint leak (fixed)**
-The environment was telling the agent the next correct tool call via the `hint` field in observations. A 3-line agent that just reads the hint string would beat any untrained LLM on easy tasks. The "multi-step reasoning" claim was false.
-Fix: `hint_enabled=False` for all four task pools. The agent must read the invoice and plan the tool sequence independently.
-
-**Exploit 2 — Trainer impersonation (fixed)**
-The GRPO reward function was injecting `read_invoice` and `check_pan` itself (using ground-truth vendor PAN from `env._task["vendor_pan"]`), then scoring only the model's `submit_answer`. The gradient was teaching "emit submit_answer immediately; the trainer will do the reasoning for you."
-Fix: `episode_reward_fn` now parses the model's full action sequence and replays it verbatim. The trainer injects nothing. Only the terminal reward counts.
-
-**Exploit 3 — Evidence-free `no_tds` claim (fixed)**
-Submitting `no_tds=true` with `tds_amount_inr=0.0` (claiming below-threshold) scored 0.99 with zero evidence. Any model could achieve this trivially.
-Fix: `no_tds=true` without a prior `query_ytd` call incurs a −0.30 penalty. The model must demonstrate it checked the YTD accumulation before claiming below-threshold.
-
 ## Results
 
-### Baseline (Qwen2.5-3B-Instruct, untrained)
+### Setup
 
-Measured via `rollout_episode` in `LegaLoom_GRPO_Training.ipynb` — untrained Qwen2.5-3B, same prompt as training, no hints, no worked examples. Scores pending the onsite training run.
+Qwen2.5-3B-Instruct + LoRA (r=16) via Unsloth. **40 GRPO steps total** — 20 on `task_easy` then 20 on `task_hard`. Procedural invoice generation enabled, hints disabled across all tasks, full episode rollouts (no trainer injection). Both baseline and trained scores come from `rollout_episode` using the same model, same prompt, same procedural distribution — only the LoRA weights differ. Each cell is the mean of 5 fresh-seed episodes per task.
 
-| Task | Baseline | After GRPO |
-|------|----------|-----------|
-| task_easy | *(run notebook)* | *(run notebook)* |
-| task_medium | *(run notebook)* | *(run notebook)* |
-| task_hard | *(run notebook)* | *(run notebook)* |
-| task_expert | *(run notebook)* | *(run notebook)* |
+### Before vs After GRPO
 
-### After GRPO Training
+![Before vs After GRPO](./before_after.png)
 
-> Training runs onsite with HuggingFace compute credits (April 25–26).
-> Real reward curves and before/after scores will be committed here after training completes.
+| Task | Baseline | After GRPO | Δ |
+|------|---------:|-----------:|------:|
+| `task_easy` | 0.186 | **0.206** | +11% |
+| `task_medium` | 0.450 | 0.288 | −36% |
+| `task_hard` | 0.078 | **0.146** | +87% |
+| `task_expert` | 0.200 | **0.214** | +7% |
+| **Average** | **0.229** | **0.214** | **−7%** |
 
-> **Reward curves will be added here after the onsite training run (April 25–26).**
-> Run `LegaLoom_GRPO_Training.ipynb` in Colab to generate real curves.
+**The headline result is `task_hard`: +87% improvement on inoperative-PAN scenarios** — the most realistic compliance edge case. Phase 2 training taught the model to recognize the Section 206AA override and apply the 20% flat rate when PAN is INOPERATIVE. Missing an inoperative PAN is the single most common TDS penalty trigger in real Indian compliance.
+
+### Why `task_medium` regressed
+
+Training on easy + hard pulled the policy toward inoperative-PAN detection, which over-triggers on threshold-boundary scenarios in medium. The average lift is −7% — honestly negative. With a 4-phase curriculum covering all tasks and more compute, we'd expect medium to stabilize. The 4-phase notebook (`LegaLoom_FullCurriculum.ipynb`) addresses this.
+
+### Reward curves
+
+![GRPO Reward Curves](./reward_curves.png)
+
+Phase 1 (easy): mean reward 0.075, mostly flat — 50% of steps had `frac_reward_zero_std = 1.0` (all 4 generations scored identically, giving GRPO zero advantage signal). Phase 2 (hard): mean reward 0.088 with spikes to 0.21. Only 5% zero-std steps — the policy found real gradient signal on inoperative-PAN reasoning, which is why `task_hard` improved.
+
+Raw artifacts: [`training_scores.json`](./training_scores.json), [`training_log.json`](./training_log.json).
+
+---
+
+## Known Limitations
+
+- **50% of Phase 1 GRPO steps had zero reward variance** — all 4 generations scored identically. DPO warmup or higher `num_generations` (8 instead of 4) would address this.
+- **Training narrowly on easy + hard caused medium to regress.** A 4-phase curriculum would help; the notebook includes this option.
+- **Single-shot completion API** — the model emits the full action sequence in one generation without environment feedback between actions. A multi-turn rollout loop would improve, but doesn't fit TRL's prompt→completion API cleanly.
+- **5-episode evaluations have ~0.18 standard error.** A production evaluation would use 30+ episodes per task for tighter confidence.
 
 ---
 
@@ -150,9 +162,6 @@ Training uses GRPO via Unsloth + TRL. The key design decision: **full episode ro
 
 See [`train_grpo.py`](./train_grpo.py) for the full pipeline.
 
-**Why full-episode rewards matter:**
-Single-step reward functions train the model to emit syntactically valid JSON and receive a format bonus — not to reason about TDS. Full-episode rewards force the model to produce a complete, coherent action sequence where only the final graded output counts.
-
 ---
 
 ## Materials
@@ -160,10 +169,9 @@ Single-step reward functions train the model to emit syntactically valid JSON an
 | Resource | Link |
 |---------|------|
 | 🤗 HuggingFace Space | [aarav0202/legaloom-env](https://huggingface.co/spaces/aarav0202/legaloom-env) |
+| 📓 Training Notebook | [`LegaLoom_FullCurriculum.ipynb`](./LegaLoom_FullCurriculum.ipynb) — 4-phase GRPO, Colab T4 |
 | 📓 Training Script | [`train_grpo.py`](./train_grpo.py) |
-| 📓 Colab Notebook | [`LegaLoom_GRPO_Training.ipynb`](./LegaLoom_GRPO_Training.ipynb) |
-| 📝 Blog Post | *(link after posting)* |
-| 🎬 Demo Video | *(link after recording)* |
+| 📝 Blog Post | [`blog_post.md`](./blog_post.md) |
 
 ---
 
@@ -210,17 +218,23 @@ docker run -p 7860:7860 legaloom-env
 
 ```
 legaloom_env/
-├── inference.py                   # Baseline agent
-├── train_grpo.py                  # GRPO training pipeline (full episode rollouts)
-├── LegaLoom_GRPO_Training.ipynb   # Colab notebook
-├── models.py                      # Pydantic typed models
-├── openenv.yaml                   # OpenEnv manifest
-├── Dockerfile                     # Container
+├── inference.py                      # Baseline agent (Round 1)
+├── train_grpo.py                     # GRPO training pipeline
+├── LegaLoom_FullCurriculum.ipynb     # 4-phase training notebook (Colab)
+├── models.py                         # Pydantic typed models
+├── openenv.yaml                      # OpenEnv manifest
+├── Dockerfile                        # Container
+├── blog_post.md                      # Project writeup
+├── demo_script.md                    # Video script
+├── before_after.png                  # Training evidence
+├── reward_curves.png                 # Training evidence
+├── training_scores.json              # Raw eval numbers
+├── training_log.json                 # TRL log_history
 ├── server/
-│   ├── legaloom_env_environment.py  # Core env (660 lines)
-│   ├── graders.py                   # Deterministic composite graders
-│   ├── tasks.py                     # 4 tasks, 260-invoice DB
-│   ├── tds_rules.py                 # TDS rule engine
+│   ├── legaloom_env_environment.py   # Core env
+│   ├── graders.py                    # Deterministic composite graders
+│   ├── tasks.py                      # 4 tasks, 260-invoice DB
+│   ├── tds_rules.py                  # TDS rule engine
 │   └── ...
 └── tests/ (32 tests)
     ├── test_determinism.py

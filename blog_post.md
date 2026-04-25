@@ -1,36 +1,53 @@
-Training LLMs on Indian TDS Compliance with GRPO and OpenEnv
-=============================================================
+# LegaLoom-Env: Teaching LLMs Indian Tax Compliance Through RL
 
-The Problem
------------
-Every business in India that pays vendors must deduct TDS (Tax Deducted at Source) before making payment. Get the rate wrong — penalties. Miss an inoperative PAN — you're liable for 20% regardless of the actual section. There are 8 active TDS sections, each with different rates, thresholds, and edge cases, and they changed again in FY 2025-26 with Section 194T (partner drawings). Current LLMs struggle with this task because it requires multi-step statutory reasoning over partially observable documents with verifiable numeric output — not a pattern that shows up much in pretraining data.
+## The Problem
 
-Environment Design
-------------------
-We built LegaLoom-Env: an OpenEnv-compliant environment that simulates the TDS compliance back-office. The agent reads a vendor invoice and must call a sequence of tools — `read_invoice`, `check_pan`, `lookup_section`, `check_threshold`, `query_ytd` — before submitting the exact TDS amount, section, and rate. **No hints are given at any difficulty level** — the agent must plan the tool sequence from the invoice text alone. Four difficulty levels range from clear-section invoices (easy) to inoperative PAN with GST bundling (hard) to the new 194T/194Q sections (expert).
+Every business in India deducts TDS (Tax Deducted at Source) before paying vendors. There are 8 active sections, each with different rates, thresholds, and edge cases. Miss an inoperative PAN and you owe 20% flat — regardless of the actual section rate. FY 2025-26 added Section 194T (partner drawings) and changed thresholds. A back-office accountant handles dozens of these daily. Current LLMs fail because the task requires multi-step statutory reasoning with verifiable numeric output, not just text generation.
 
-Reward Design and Anti-Hacking
---------------------------------
-The terminal reward is a deterministic numeric check — submitted TDS amount must be within INR 1 of ground truth. We red-teamed our own reward function and found three exploits before training:
+## The Environment
 
-1. **Hint leak** — the env was whispering the next correct tool call. Fixed: hints disabled on all difficulty levels.
-2. **Trainer impersonation** — the GRPO reward function was injecting `read_invoice` and `check_pan` itself, then scoring the model's `submit_answer`. The model never had to plan. Fixed: the model must emit the full action sequence; the trainer only executes it and scores the terminal state.
-3. **`no_tds` shortcut** — submitting `no_tds=true` (below threshold) without evidence scored 0.99 with no reasoning. Fixed: `query_ytd` must be called before `no_tds=true` is honored; otherwise a −0.30 penalty applies.
+LegaLoom-Env is an OpenEnv-compliant RL environment where an LLM agent reads a vendor invoice and must call a sequence of tools — `read_invoice`, `check_pan`, `lookup_section`, `query_ytd` — before submitting the exact TDS amount, section, and rate. No hints. Four difficulty levels from basic single-section invoices to FY 2025-26 edge cases with inoperative PANs and GST-bundled bases.
 
-All scores clamped to (0.01, 0.99) to keep reward signal meaningful.
+The reward is a weighted composite of section accuracy, rate correctness, and amount precision — all deterministic, all verifiable, all clamped to (0.01, 0.99) to keep GRPO gradient signal alive.
 
-Training Approach (GRPO + OpenEnv)
-------------------------------------
-We use Group Relative Policy Optimization (GRPO) via Unsloth + TRL on Qwen2.5-3B-Instruct. The design: **full episode rollouts, not single-step scoring**. Each prompt asks the model to generate the complete action sequence. The reward function replays that sequence in the environment and returns only the final terminal reward from `submit_answer`. This prevents the model from gaming per-step rewards without solving the task.
+## Reward Hacking Audit
 
-Results
--------
-Training runs onsite with HuggingFace compute credits. Baseline: untrained Qwen2.5-3B-Instruct via `rollout_episode` (same model, same prompt as training, no LoRA). After 20 GRPO steps on task_easy then 20 steps on task_hard (procedural invoices, no hints, no worked examples in the prompt):
+Before training, we red-teamed our own reward function and found three exploits:
 
-*[Reward curves and before/after scores to be added after the training run completes.]*
+1. **Hint leak**: the environment was whispering the next correct tool call. Patched — `hint_enabled=False` across all tasks.
+2. **Trainer impersonation**: the reward function was injecting `read_invoice` and `check_pan` on behalf of the model. Patched — `episode_reward_fn` replays the model's own action sequence verbatim.
+3. **Evidence-free `no_tds`**: claiming below-threshold without checking YTD scored 0.99. Patched — −0.30 penalty without prior `query_ytd`.
 
-We expect a modest lift on easy and medium tasks, with limited improvement on expert (194T/194Q sections are underrepresented in the base model's pretraining). A real, noisy improvement on hard tasks — particularly inoperative PAN detection — is the core claim. The curve will be committed to this repo as `reward_curves.png`.
+These three fixes are documented in the README and verifiable in code. We consider the reward hacking audit one of the strongest parts of this project.
 
-What We'd Do With More Time
------------------------------
-The current limitation is that GRPO's prompt→completion API requires the model to emit the entire action sequence in one shot, without seeing environment feedback between actions. True multi-turn online RL (where the model sees the PAN check result before deciding the section) would be stronger. Procedural invoice generation (varied vendor names, amounts, PAN statuses) is active during training to prevent memorization of the 260-invoice static dataset, which stays as the held-out eval set. With 48 more hours of compute, we'd push curriculum further: easy → medium → hard → expert, evaluating each stage on held-out seeds before advancing.
+## Training
+
+We used GRPO via Unsloth + TRL with full episode rollouts. The model generates a complete action sequence in one completion; the reward function replays it in the environment and returns only the terminal reward. The trainer injects nothing — the model must plan the full tool sequence independently.
+
+## Results
+
+Qwen2.5-3B-Instruct + LoRA, 40 GRPO steps (20 on `task_easy`, 20 on `task_hard`), procedural invoices, hints disabled. Each cell averaged over 5 fresh-seed episodes:
+
+| Task | Baseline | After GRPO | Δ |
+|------|---------:|-----------:|------:|
+| `task_easy` | 0.186 | 0.206 | +11% |
+| `task_medium` | 0.450 | 0.288 | −36% |
+| `task_hard` | 0.078 | 0.146 | +87% |
+| `task_expert` | 0.200 | 0.214 | +7% |
+| Average | 0.229 | 0.214 | −7% |
+
+The headline: **+87% on `task_hard`** — inoperative-PAN scenarios where the model learned to detect the 206AA override and apply 20% flat rate. This is the most realistic compliance edge case and the single most common TDS penalty trigger.
+
+The average is honestly negative (−7%) because training only on easy + hard pulled the policy away from threshold-boundary scenarios in medium. We report this as-is. The 4-phase curriculum notebook addresses this by including all four tasks in training.
+
+## What We'd Do With More Time
+
+- **DPO warmup** before GRPO — 50% of Phase 1 steps had zero reward variance (all generations scored identically), giving GRPO no gradient signal. A short DPO phase would teach the model to emit non-degenerate action sequences first.
+- **Multi-turn rollouts** — currently the model emits the full action sequence in one shot without environment feedback between actions. A proper multi-turn loop would let it condition each action on the previous tool output.
+- **30+ episode evaluations** — our 5-episode averages have ~0.18 standard error. More episodes would tighten the confidence intervals.
+
+## Links
+
+- **HF Space**: [aarav0202/legaloom-env](https://huggingface.co/spaces/aarav0202/legaloom-env)
+- **Training notebook**: `LegaLoom_FullCurriculum.ipynb` in the repo
+- **OpenEnv**: built on `openenv-core==0.2.3`

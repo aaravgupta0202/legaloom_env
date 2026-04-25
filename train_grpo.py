@@ -36,7 +36,7 @@ from server.tasks import all_task_ids, sample_task
 from server.scoring import clamp_score
 from models import TDSAction
 
-CURRICULUM_ORDER = ["task_easy", "task_medium", "task_hard"]
+CURRICULUM_ORDER = ["task_easy", "task_medium", "task_hard", "task_expert"]
 
 SYSTEM_PROMPT = """You are an expert Indian TDS (Tax Deducted at Source) compliance agent, FY 2025-26.
 Read a vendor invoice and compute the exact TDS deduction in INR.
@@ -360,6 +360,94 @@ def evaluate_model(model, tokenizer, num_episodes: int = 8, base_seed: int = 999
         results[task_id] = sum(rewards) / len(rewards) if rewards else 0.0
     results["average"] = sum(results.values()) / len(results) if results else 0.0
     return results
+
+
+def run_curriculum_training(
+    model,
+    tokenizer,
+    task_schedule: list = None,
+    steps_per_phase: int = 20,
+    examples_per_task: int = 60,
+    output_dir: str = "./legaloom_grpo_output",
+    learning_rate: float = 5e-6,
+    num_generations: int = 4,
+    max_prompt_length: int = 1536,
+    max_completion_length: int = 768,
+):
+    """Run multi-phase GRPO training across a task schedule.
+
+    Each phase trains for `steps_per_phase` on one task_id, then moves
+    to the next. The model carries learning across phases.
+
+    Returns the combined log_history list across all phases.
+    """
+    from trl import GRPOConfig, GRPOTrainer
+
+    if task_schedule is None:
+        task_schedule = CURRICULUM_ORDER
+
+    try:
+        from unsloth import is_bfloat16_supported
+        bf16 = is_bfloat16_supported()
+    except ImportError:
+        import torch
+        bf16 = torch.cuda.is_bf16_supported() if torch.cuda.is_available() else False
+    fp16 = not bf16
+
+    full_log = []
+    for phase_idx, task_id in enumerate(task_schedule):
+        print(f"\n=== Phase {phase_idx+1}/{len(task_schedule)}: {task_id} "
+              f"({steps_per_phase} steps) ===")
+
+        dataset = build_training_dataset(
+            task_ids=[task_id],
+            examples_per_task=examples_per_task,
+        )
+        if dataset is None:
+            print(f"  WARNING: empty dataset for {task_id}, skipping")
+            continue
+
+        def _make_reward_fn(tid):
+            def fn(prompts, completions, **kwargs):
+                clean_kwargs = {k: v for k, v in kwargs.items() if k != "task_id"}
+                return episode_reward_fn(prompts, completions, task_id=tid, **clean_kwargs)
+            return fn
+
+        cfg = GRPOConfig(
+            learning_rate=learning_rate,
+            num_train_epochs=1,
+            per_device_train_batch_size=1,
+            gradient_accumulation_steps=4,
+            num_generations=num_generations,
+            max_prompt_length=max_prompt_length,
+            max_completion_length=max_completion_length,
+            beta=0.01,
+            logging_steps=1,
+            max_steps=steps_per_phase,
+            output_dir=os.path.join(output_dir, f"phase_{phase_idx}_{task_id}"),
+            report_to="none",
+            bf16=bf16,
+            fp16=fp16,
+            save_strategy="no",
+        )
+
+        trainer = GRPOTrainer(
+            model=model,
+            args=cfg,
+            train_dataset=dataset,
+            reward_funcs=[_make_reward_fn(task_id)],
+            processing_class=tokenizer,
+        )
+        trainer.train()
+
+        for entry in trainer.state.log_history:
+            entry["phase"] = phase_idx
+            entry["phase_task_id"] = task_id
+        full_log.extend(trainer.state.log_history)
+        print(f"  ✓ Phase {phase_idx+1} done. {len(trainer.state.log_history)} entries.")
+
+    print(f"\n=== Curriculum complete. {len(full_log)} total log entries. ===")
+    return full_log
 
 
 def run_training(

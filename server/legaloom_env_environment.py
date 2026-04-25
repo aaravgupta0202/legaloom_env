@@ -177,17 +177,17 @@ class LegaloomEnvironment(Environment):
             if hasattr(params, "model_dump"):
                 params = params.model_dump(exclude_none=True)
 
-        handlers = {
-            "read_invoice": self._handle_read_invoice,
-            "check_pan": self._handle_check_pan,
-            "check_threshold": self._handle_check_threshold,
-            "query_ytd": self._handle_query_ytd,
-            "lookup_section": self._handle_lookup_section,
-            "query_law": self._handle_query_law,
-            "submit_answer": self._handle_submit_answer,
-            "request_hint": self._handle_request_hint,
-            "validate_reasoning": self._handle_validate_reasoning,
-        }
+            handlers = {
+                "read_invoice": self._handle_read_invoice,
+                "check_pan": self._handle_check_pan,
+                "check_threshold": self._handle_check_threshold,
+                "query_ytd": self._handle_query_ytd,
+                "lookup_section": self._handle_lookup_section,
+                "query_law": self._handle_query_law,
+                "submit_answer": self._handle_submit_answer,
+                "request_hint": self._handle_request_hint,
+                "validate_reasoning": self._handle_validate_reasoning,
+            }
 
             handler = handlers.get(action_type)
             if handler:
@@ -597,6 +597,41 @@ class LegaloomEnvironment(Environment):
         self._reward_earned[key] = True
         self._episode_reward = _step_reward(self._episode_reward + reward)
         return _step_reward(reward)
+
+    def _handle_request_hint(self, params, steps_used, max_steps):
+        """Return hint if enabled, otherwise a neutral message."""
+        self._state.hints_requested += 1
+        hint = self._build_hint()
+        msg = hint if hint else "Hints are disabled for this task."
+        return TDSObservation(
+            done=False, reward=-0.01,
+            invoice_text=self._invoice_text(),
+            action_result=msg,
+            available_actions=self._available_actions(),
+            steps_used=steps_used, max_steps=max_steps,
+            hint="",
+        )
+
+    def _handle_validate_reasoning(self, params, steps_used, max_steps):
+        """Report which reasoning steps have been completed so far."""
+        gaps = []
+        if not self._invoice_read:
+            gaps.append("Invoice not yet read")
+        if not self._state.pan_checked:
+            gaps.append("PAN status not checked")
+        if not self._state.section_identified:
+            gaps.append("Section not identified")
+        self._state.reasoning_validated = True
+        self._state.reasoning_gaps = gaps
+        msg = "Reasoning complete." if not gaps else f"Gaps: {', '.join(gaps)}"
+        return TDSObservation(
+            done=False, reward=0.0,
+            invoice_text=self._invoice_text(),
+            action_result=msg,
+            available_actions=self._available_actions(),
+            steps_used=steps_used, max_steps=max_steps,
+            hint=self._build_hint(),
+        )
 
     def _invoice_text(self) -> str:
         return self._task["invoice_text"] if self._invoice_read else ""
