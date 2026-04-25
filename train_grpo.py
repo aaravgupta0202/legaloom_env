@@ -8,7 +8,7 @@ Key improvements over v1:
 4. Higher temperature for GRPO exploration (0.7)
 5. Longer generation (512 tokens) for multi-step episodes
 6. More training steps (50+), smaller LR (2e-6)
-7. KL penalty beta=0.04 for stable policy updates
+7. KL penalty beta=0.01 for stable policy updates
 8. Warmup + cosine schedule for stable convergence
 9. Multi-task reward functions with difficulty-based weighting
 10. Evaluation rollouts every N steps to track progress
@@ -70,7 +70,11 @@ Output ONLY the JSON. Nothing else."""
 
 
 def _extract_action(text: str) -> Optional[Dict]:
-    match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)?\}', text, re.DOTALL)
+    # Strip line-anchored markdown code fences (```json ... ```) without
+    # corrupting backticks inside JSON strings.
+    cleaned = re.sub(r'^[ \t]*```(?:json|JSON)?[ \t]*\n?', '', text, flags=re.MULTILINE)
+    cleaned = re.sub(r'\n[ \t]*```[ \t]*$', '', cleaned, flags=re.MULTILINE)
+    match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)?\}', cleaned, re.DOTALL)
     if not match:
         return None
     try:
@@ -245,7 +249,11 @@ def episode_reward_fn(prompts, completions, **kwargs) -> List[float]:
             env.reset(task_id=task_id, seed=seed)
 
             import re as _re
-            action_blocks = _re.findall(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)?\}', text, _re.DOTALL)
+            # Strip line-anchored markdown code fences without corrupting
+            # backticks that may legitimately appear inside JSON strings.
+            cleaned = _re.sub(r'^[ \t]*```(?:json|JSON)?[ \t]*\n?', '', text, flags=_re.MULTILINE)
+            cleaned = _re.sub(r'\n[ \t]*```[ \t]*$', '', cleaned, flags=_re.MULTILINE)
+            action_blocks = _re.findall(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)?\}', cleaned, _re.DOTALL)
 
             final_reward = 0.05
             submitted = False
@@ -508,7 +516,7 @@ def run_training(
         num_generations=4,
         max_prompt_length=512,
         max_completion_length=512,
-        beta=0.04,
+        beta=0.01,
         logging_steps=1,
         max_steps=num_steps,
         output_dir=output_dir,
@@ -532,7 +540,7 @@ def run_training(
     )
 
     print(f"Starting GRPO training: {num_steps} steps, tasks={train_task_ids}, curriculum={curriculum}")
-    print(f"  LR=2e-6, beta=0.04, lora_alpha=32, max_completion=512, warmup=10%")
+    print(f"  LR=2e-6, beta=0.01, lora_alpha=32, max_completion=512, warmup=10%")
     trainer.train()
 
     log_history = trainer.state.log_history

@@ -81,6 +81,19 @@ def grade_submission(
             W_PAN, W_SECT, W_RATE, W_GOODS, W_GST, W_AMOUNT = 0.0, 0.25, 0.15, 0.0, 0.0, 0.60
     elif task_id == "task_expert":
         W_PAN, W_SECT, W_RATE, W_GOODS, W_GST, W_AMOUNT = 0.0, 0.35, 0.20, 0.0, 0.10 if gst_bundled_case else 0.0, 0.45
+    elif task_id == "task_adversarial":
+        # Adversarial benchmark: amount precision matters most (these cases test
+        # rate/threshold/section knowledge — getting the final number right
+        # demonstrates all reasoning steps were correct).
+        if is_inop_pan:
+            if goods > 0:
+                W_PAN, W_SECT, W_RATE, W_GOODS, W_GST, W_AMOUNT = 0.25, 0.15, 0.15, 0.10, 0.0, 0.35
+            else:
+                W_PAN, W_SECT, W_RATE, W_GOODS, W_GST, W_AMOUNT = 0.25, 0.15, 0.15, 0.0, 0.10 if gst_bundled_case else 0.0, 0.45
+        elif goods > 0:
+            W_PAN, W_SECT, W_RATE, W_GOODS, W_GST, W_AMOUNT = 0.0, 0.25, 0.15, 0.20, 0.0, 0.40
+        else:
+            W_PAN, W_SECT, W_RATE, W_GOODS, W_GST, W_AMOUNT = 0.0, 0.25, 0.15, 0.0, 0.10 if gst_bundled_case else 0.0, 0.60
     else:  # task_hard
         if is_inop_pan:
             if goods > 0:

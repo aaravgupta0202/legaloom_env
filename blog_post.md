@@ -26,7 +26,7 @@ We used GRPO via Unsloth + TRL with full episode rollouts. The model generates a
 
 ## Results
 
-Qwen2.5-3B-Instruct + LoRA, 40 GRPO steps on `task_hard` with `num_generations=8`, procedural invoices, hints disabled. Each cell averaged over 10 fresh-seed episodes:
+Qwen2.5-3B-Instruct + LoRA, 40 GRPO steps on `task_hard` with `num_generations=8`, procedural invoices, hints disabled. Each cell averaged over 30 fresh-seed episodes:
 
 | Task | Baseline | After GRPO | Δ |
 |------|---------:|-----------:|------:|
@@ -44,7 +44,7 @@ The average may be negative because training on hard pushes the policy toward ag
 
 - **DPO warmup** before GRPO — 50% of Phase 1 steps had zero reward variance (all generations scored identically), giving GRPO no gradient signal. A short DPO phase would teach the model to emit non-degenerate action sequences first.
 - **Multi-turn rollouts** — currently the model emits the full action sequence in one shot without environment feedback between actions. A proper multi-turn loop would let it condition each action on the previous tool output.
-- **30+ episode evaluations** — our 10-episode averages have ~0.18 standard error. More episodes would tighten the confidence intervals.
+- **30 episodes still leaves ~0.075 standard error** on the bimodal score distribution — a production evaluation would use 100+ episodes for tight bounds on small lifts.
 
 ## Links
 

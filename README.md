@@ -23,7 +23,7 @@ Real interaction with rule-governed APIs (PAN registry, threshold lookup, YTD ac
 
 [![OpenEnv](https://img.shields.io/badge/OpenEnv-0.2.3-blue)](https://github.com/meta-pytorch/OpenEnv)
 [![HF Space](https://img.shields.io/badge/HuggingFace-Space-yellow)](https://huggingface.co/spaces/aarav0202/legaloom-env)
-[![Tests](https://img.shields.io/badge/tests-32%20passing-green)]()
+[![Tests](https://img.shields.io/badge/tests-51%20passing-green)]()
 
 An OpenEnv-compliant RL environment for training LLMs on Indian TDS (Tax Deducted at Source) compliance — the first of its kind.
 
@@ -110,7 +110,7 @@ Additional penalties: `no_tds` on taxable invoice (−0.25), evidence-free `no_t
 
 ### Setup
 
-Qwen2.5-3B-Instruct + LoRA (r=16) via Unsloth. **40 GRPO steps on `task_hard`** with `num_generations=8` for maximum reward variance. Procedural invoice generation enabled, hints disabled across all tasks, full episode rollouts (no trainer injection). Both baseline and trained scores come from `rollout_episode` using the same model, same prompt, same procedural distribution — only the LoRA weights differ. Each cell is the mean of 10 fresh-seed episodes per task.
+Qwen2.5-3B-Instruct + LoRA (r=16) via Unsloth. **40 GRPO steps on `task_hard`** with `num_generations=8` for maximum reward variance. Procedural invoice generation enabled, hints disabled across all tasks, full episode rollouts (no trainer injection). Both baseline and trained scores come from `rollout_episode` using the same model, same prompt, same procedural distribution — only the LoRA weights differ. Each cell is the mean of 30 fresh-seed episodes per task.
 
 ### Before vs After GRPO
 
@@ -140,11 +140,53 @@ Raw artifacts: [`training_scores.json`](./training_scores.json), [`training_log.
 
 ---
 
+## Adversarial Benchmark
+
+A held-out set of **20 hand-curated TDS scenarios** designed to expose specific LLM failure modes. These cases never appear in training data — they're a frontier benchmark for any model claiming to handle Indian compliance.
+
+**9 failure-mode categories:**
+- `inoperative_pan_low_base_rate` — 206AA override on 2% / 0.1% sections (10x–200x rate jumps)
+- `fy2526_new_sections` — Section 194T (partner drawings) and 194Q (goods 0.1%) absent from pretraining
+- `mixed_goods_services_positional` — services portion only is taxable, even when goods are listed first
+- `threshold_boundary` — YTD off-by-one cases (₹49,999 + ₹2 vs ₹49,500 + ₹400)
+- `gst_base_handling` — TDS computed on pre-GST amount, not invoice total
+- `section_subtype_ambiguity` — 194J Professional 10% vs Technical 2%, 194I Building 10% vs Machinery 2%
+- `entity_type_rate_change` — Pvt Ltd → 194J Technical (2%); Individual → 194J Professional (10%)
+- `conflicting_evidence` — invoice cites stale rules; current statute applies
+- `compound_traps` — multiple edge cases stacked (inoperative PAN + mixed invoice, etc.)
+
+Each case has a deterministic ground truth; the scorer computes a composite of section accuracy (35%), rate correctness (25%), and amount precision (40%).
+
+**Run the benchmark yourself:** [`LegaLoom_AdversarialBenchmark.ipynb`](./LegaLoom_AdversarialBenchmark.ipynb) — supports baseline Qwen-3B, trained Qwen-3B, plus optional GPT-4o-mini, Claude Sonnet 4.5, Gemini 2.5 Pro (set `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_API_KEY` env vars).
+
+The 20-case benchmark is also covered by 12 unit tests in [`tests/test_adversarial_cases.py`](./tests/test_adversarial_cases.py) verifying determinism, well-formedness, perfect-submission scoring, and category coverage.
+
+---
+
+## Reward Hacking Ablation
+
+The README's claim that we patched 3 reward-hacking exploits is backed by **7 ablation tests in [`tests/test_ablation.py`](./tests/test_ablation.py)** that exercise each exploit:
+
+```bash
+$ pytest tests/test_ablation.py -v
+test_no_tds_without_query_ytd_is_penalized          PASSED
+test_no_tds_with_query_ytd_evidence_not_penalized   PASSED
+test_hints_disabled_for_all_task_pools              PASSED
+test_hint_field_is_empty_in_observations            PASSED
+test_episode_reward_fn_does_not_inject_actions      PASSED
+test_floor_reward_when_no_submission                PASSED
+test_all_three_patches_present                      PASSED
+```
+
+Each test runs an exploit trajectory (e.g., "submit `no_tds=true` without calling `query_ytd`") and asserts that the patched environment scores it < 0.5. The first two ablation tests use seed-pinned tasks where the ground truth is *not* `no_tds`, so the exploit is wrong on its merits — the patch makes that wrongness penalty-stacked.
+
+---
+
 ## Known Limitations
 
 - **Training on `task_hard` alone may cause medium to regress** — the optimal policies for hard (apply 20% aggressively) and medium (check if TDS applies at all) point in opposite directions. Mixed-task batches would help but require more compute.
 - **Single-shot completion API** — the model emits the full action sequence in one generation without environment feedback between actions. A multi-turn rollout loop would improve, but doesn't fit TRL's prompt→completion API cleanly.
-- **10-episode evaluations have ~0.13 standard error.** A production evaluation would use 30+ episodes per task for tighter confidence.
+- **30-episode evaluations have ~0.075 standard error** on the bimodal score distribution — a production evaluation would use 100+ episodes for tight bounds on small lifts.
 
 ---
 
@@ -169,6 +211,7 @@ See [`train_grpo.py`](./train_grpo.py) for the full pipeline.
 |---------|------|
 | 🤗 HuggingFace Space | [aarav0202/legaloom-env](https://huggingface.co/spaces/aarav0202/legaloom-env) |
 | 📓 Training Notebook | [`LegaLoom_FullCurriculum.ipynb`](./LegaLoom_FullCurriculum.ipynb) — single-phase GRPO, Colab T4 |
+| 📓 Adversarial Benchmark | [`LegaLoom_AdversarialBenchmark.ipynb`](./LegaLoom_AdversarialBenchmark.ipynb) — 20 hand-curated cases vs frontier models |
 | 📓 Training Script | [`train_grpo.py`](./train_grpo.py) |
 | 📝 Blog Post | [`blog_post.md`](./blog_post.md) |
 
@@ -220,6 +263,7 @@ legaloom_env/
 ├── inference.py                      # Baseline agent (Round 1)
 ├── train_grpo.py                     # GRPO training pipeline
 ├── LegaLoom_FullCurriculum.ipynb     # Training notebook (Colab T4)
+├── LegaLoom_AdversarialBenchmark.ipynb  # 20-case frontier benchmark
 ├── models.py                         # Pydantic typed models
 ├── openenv.yaml                      # OpenEnv manifest
 ├── Dockerfile                        # Container
@@ -234,13 +278,16 @@ legaloom_env/
 │   ├── graders.py                    # Deterministic composite graders
 │   ├── tasks.py                      # 4 tasks, 260-invoice DB
 │   ├── tds_rules.py                  # TDS rule engine
+│   ├── adversarial_cases.py          # 20 hand-curated frontier benchmark cases
 │   └── ...
-└── tests/ (32 tests)
+└── tests/ (51 tests)
     ├── test_determinism.py
     ├── test_edge_cases.py
     ├── test_episode_rollout.py
     ├── test_grader_consistency.py
     ├── test_inference_logging.py
     ├── test_reward_hacking.py
-    └── test_schema_contract.py
+    ├── test_schema_contract.py
+    ├── test_ablation.py
+    └── test_adversarial_cases.py
 ```

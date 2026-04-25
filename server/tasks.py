@@ -103,9 +103,22 @@ DIFFICULTY_POOLS = {
         ],
         "hint_enabled": False,
     },
+    "task_adversarial": {
+        "difficulty": "adversarial",
+        "description": (
+            "Hand-curated benchmark of 20 frontier-failing scenarios. "
+            "Each case targets a specific failure mode (206AA exceptions, threshold "
+            "boundaries, FY 2025-26 sections, mixed invoices, PAN-status flips, "
+            "section misclassification, group YTD aggregation). "
+            "Used as a benchmark, not a training target. Seed indexes into cases."
+        ),
+        "max_steps": 10,
+        "categories": ["adversarial"],
+        "hint_enabled": False,
+    },
 }
 
-TASK_ORDER = ["task_easy", "task_medium", "task_hard", "task_expert"]
+TASK_ORDER = ["task_easy", "task_medium", "task_hard", "task_expert", "task_adversarial"]
 
 
 def _build_scenario_noise(task_id: str, chosen: dict, seed: Optional[int]) -> dict:
@@ -165,6 +178,13 @@ def sample_task(task_id: str, seed: Optional[int] = None, use_procedural: Option
     """
     if task_id not in DIFFICULTY_POOLS:
         raise KeyError(f"Unknown task_id: {task_id!r}. Valid: {TASK_ORDER}")
+
+    # Adversarial benchmark: deterministic case selection by seed
+    if task_id == "task_adversarial":
+        from .adversarial_cases import ADVERSARIAL_CASES, get_adversarial_task
+        # Seed indexes into the 20 cases (mod 20 so any seed is valid)
+        idx = (seed if seed is not None else 0) % len(ADVERSARIAL_CASES)
+        return get_adversarial_task(ADVERSARIAL_CASES[idx]["case_id"])
 
     pool_config = DIFFICULTY_POOLS[task_id]
     rng = random.Random(seed if seed is not None else DEFAULT_TASK_SEED)
