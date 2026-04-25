@@ -175,8 +175,8 @@ Single-step reward functions train the model to emit syntactically valid JSON an
 | 🤗 HuggingFace Space | [aarav0202/legaloom-env](https://huggingface.co/spaces/aarav0202/legaloom-env) |
 | 📓 Training Script | [`train_grpo.py`](./train_grpo.py) |
 | 📓 Training Notebook | [`LegaLoom_FullCurriculum_HFSpace.ipynb`](./LegaLoom_FullCurriculum_HFSpace.ipynb) — 4-phase curriculum, vanilla HF+PEFT, A10G |
-| 📝 Blog Post | *(link after posting)* |
-| 🎬 Demo Video | *(link after recording)* |
+| 📝 Blog Post | [`blog_post.md`](./blog_post.md) |
+| 🎬 Demo Video | *(optional — blog satisfies the requirement)* |
 
 ---
 
