@@ -118,7 +118,7 @@ Fix: `no_tds=true` without a prior `query_ytd` call incurs a −0.30 penalty. Th
 
 ### Setup
 
-Qwen2.5-3B-Instruct + LoRA (r=16) via Unsloth. **40 GRPO steps total** — 20 on `task_easy` then 20 on `task_hard`. Procedural invoice generation enabled, hints disabled across all four tasks, full episode rollouts (no trainer injection). Each before/after cell below is the average of 5 fresh-seed episodes per task using `rollout_episode` in `LegaLoom_GRPO_Training.ipynb` — same model, same prompt, same procedural distribution for both measurements.
+Qwen2.5-3B-Instruct + LoRA (r=16) via Unsloth. **40 GRPO steps total** — 20 on `task_easy` then 20 on `task_hard`. Procedural invoice generation enabled, hints disabled across all four tasks, full episode rollouts (no trainer injection). Both the baseline and trained scores below come from `rollout_episode` in `LegaLoom_QuickTrain.ipynb`, using the `train_grpo.py::ROLLOUT_SYSTEM_PROMPT`. Same model architecture, same prompt, same procedural distribution for both measurements — only the LoRA weights differ. Each cell is the mean of 5 fresh-seed episodes per task.
 
 ### Before vs After GRPO
 
@@ -178,7 +178,8 @@ Single-step reward functions train the model to emit syntactically valid JSON an
 |---------|------|
 | 🤗 HuggingFace Space | [aarav0202/legaloom-env](https://huggingface.co/spaces/aarav0202/legaloom-env) |
 | 📓 Training Script | [`train_grpo.py`](./train_grpo.py) |
-| 📓 Colab Notebook | [`LegaLoom_GRPO_Training.ipynb`](./LegaLoom_GRPO_Training.ipynb) |
+| 📓 Quick Colab Notebook | [`LegaLoom_QuickTrain.ipynb`](./LegaLoom_QuickTrain.ipynb) — ~45 min, 1 phase |
+| 📓 Full Curriculum Notebook | [`LegaLoom_FullCurriculum.ipynb`](./LegaLoom_FullCurriculum.ipynb) — ~90 min, 4-phase curriculum, 10 eval episodes |
 | 📝 Blog Post | *(link after posting)* |
 | 🎬 Demo Video | *(link after recording)* |
 
@@ -229,7 +230,8 @@ docker run -p 7860:7860 legaloom-env
 legaloom_env/
 ├── inference.py                   # Baseline agent
 ├── train_grpo.py                  # GRPO training pipeline (full episode rollouts)
-├── LegaLoom_GRPO_Training.ipynb   # Colab notebook
+├── LegaLoom_QuickTrain.ipynb      # Quick run (45 min, 1-phase)
+├── LegaLoom_FullCurriculum.ipynb  # Full 4-phase curriculum (90 min)
 ├── models.py                      # Pydantic typed models
 ├── openenv.yaml                   # OpenEnv manifest
 ├── Dockerfile                     # Container

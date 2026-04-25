@@ -419,6 +419,109 @@ def build_training_dataset(task_ids=None, examples_per_task=20, base_seed=42):
     return Dataset.from_list(examples) if examples else None
 
 
+def run_curriculum_training(
+    model,
+    tokenizer,
+    task_schedule: List[str],
+    steps_per_phase: int = 20,
+    examples_per_task: int = 60,
+    output_dir: str = "./legaloom_grpo_output",
+    learning_rate: float = 5e-6,
+    num_generations: int = 4,
+    max_prompt_length: int = 1536,
+    max_completion_length: int = 768,
+):
+    """Run multi-phase GRPO training across a task schedule.
+
+    Each phase trains for `steps_per_phase` steps on a single task_id from the
+    schedule, then moves to the next. The model carries learning across phases.
+    Log entries are tagged with `phase` and `task_id` so curves can be plotted
+    with phase boundaries.
+
+    Example:
+        schedule = ['task_easy', 'task_medium', 'task_hard', 'task_expert']
+        log_history = run_curriculum_training(
+            model, tokenizer, schedule, steps_per_phase=20
+        )
+        # Total: 80 steps across all 4 difficulty levels.
+
+    For an interleaved curriculum, repeat the schedule:
+        schedule = ['task_easy', 'task_medium', 'task_hard', 'task_expert'] * 2
+
+    This function does NOT initialize the model — pass an already-loaded
+    Unsloth/HF model + tokenizer. That keeps notebook control over quantization,
+    LoRA setup, and gradient checkpointing.
+
+    Returns the combined log_history list across all phases.
+    """
+    from trl import GRPOConfig, GRPOTrainer
+
+    try:
+        from unsloth import is_bfloat16_supported
+        bf16 = is_bfloat16_supported()
+    except ImportError:
+        import torch
+        bf16 = torch.cuda.is_bf16_supported() if torch.cuda.is_available() else False
+    fp16 = not bf16
+
+    full_log = []
+    for phase_idx, task_id in enumerate(task_schedule):
+        print(f"\n=== Phase {phase_idx+1}/{len(task_schedule)}: {task_id} "
+              f"({steps_per_phase} steps) ===")
+
+        dataset = build_training_dataset(
+            task_ids=[task_id],
+            examples_per_task=examples_per_task,
+        )
+        if dataset is None:
+            print(f"  WARNING: empty dataset for {task_id}, skipping phase")
+            continue
+
+        def _make_reward_fn(tid):
+            def fn(prompts, completions, **kwargs):
+                clean_kwargs = {k: v for k, v in kwargs.items() if k != "task_id"}
+                return episode_reward_fn(prompts, completions, task_id=tid, **clean_kwargs)
+            return fn
+
+        cfg = GRPOConfig(
+            learning_rate=learning_rate,
+            num_train_epochs=1,
+            per_device_train_batch_size=1,
+            gradient_accumulation_steps=4,
+            num_generations=num_generations,
+            max_prompt_length=max_prompt_length,
+            max_completion_length=max_completion_length,
+            beta=0.01,
+            logging_steps=1,
+            max_steps=steps_per_phase,
+            output_dir=os.path.join(output_dir, f"phase_{phase_idx}_{task_id}"),
+            report_to="none",
+            bf16=bf16,
+            fp16=fp16,
+            save_strategy="no",
+        )
+
+        trainer = GRPOTrainer(
+            model=model,
+            args=cfg,
+            train_dataset=dataset,
+            reward_funcs=[_make_reward_fn(task_id)],
+            processing_class=tokenizer,
+        )
+        trainer.train()
+
+        # Tag every log entry with phase + task_id so we can split curves later
+        for entry in trainer.state.log_history:
+            entry["phase"] = phase_idx
+            entry["phase_task_id"] = task_id
+        full_log.extend(trainer.state.log_history)
+
+        print(f"  ✓ Phase {phase_idx+1} done. {len(trainer.state.log_history)} entries.")
+
+    print(f"\n=== Curriculum training complete. {len(full_log)} total log entries. ===")
+    return full_log
+
+
 def run_training(
     model_name: str = "unsloth/Qwen2.5-3B-Instruct",
     num_steps: int = 20,
