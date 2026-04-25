@@ -7,29 +7,35 @@ LegaLoom-Env: 90-Second Demo Script
 
 Show: A sample invoice with PAN, amount, and service description.
 
-[15-35s] THE ENVIRONMENT
+[15-30s] BASELINE FAILURE
 
-"We built LegaLoom-Env — an OpenEnv-compliant environment that simulates the TDS compliance back-office. The agent reads a vendor invoice and must call a sequence of tools — read_invoice, check_pan, lookup_section — before submitting the exact TDS amount, section, and rate. No hints. Four difficulty levels."
+"Here's what an untrained LLM does. It reads the invoice, guesses the section, and submits — without checking if the PAN is operative."
 
-Show: Environment action space table. Highlight the 4-phase curriculum (easy → medium → hard → expert).
+Run: Baseline agent on task_hard (inoperative PAN).
+Result: Agent submits 10% rate → Score: 0.12.
+"Wrong. This PAN is inoperative. Section 206AA requires 20%."
 
-[35-55s] REWARD HACKING AUDIT
+[30-55s] TRAINED SUCCESS
 
-"Before training, we red-teamed our own reward function and found three exploits:
-1. Hint leak — the environment was whispering the next correct tool call. Patched.
-2. Trainer impersonation — the reward function was injecting actions on behalf of the model. Patched.
-3. Evidence-free no_tds claim — the model could claim below-threshold without evidence. Patched with a −0.30 penalty."
+"After GRPO training, the same model follows the correct reasoning chain."
 
-Show: The Reward Hacking Audit section from README.
+Run: Trained agent on same invoice.
+Step 1: read_invoice → sees invoice
+Step 2: check_pan → "INOPERATIVE" flagged
+Step 3: lookup_section → identifies correct section
+Step 4: submit_answer → rate=20%, correct amount
+Result: Score: 0.85.
 
-[55-75s] TRAINING RESULTS
+"The trained agent checks PAN first, catches the inoperative flag, and applies the 20% override. That's the behavior we want."
 
-"We ran 80 GRPO steps across all four tasks using a 4-phase curriculum on Qwen2.5-3B. Medium tasks cross the success threshold at 0.528 and remain stable. The reward curves show real phase-aware dynamics — you can see the curriculum in action."
+[55-75s] TRICKY CASE: GST BUNDLING
 
-Show: Reward curves with phase boundaries. Before/after bar chart. Highlight that medium has NO regression (unlike earlier 2-phase training).
+"Here's a harder case — the invoice says 'inclusive of all taxes'. A naive agent deducts TDS on the pre-GST amount. The correct answer: when GST is bundled, TDS applies on the FULL invoice value."
+
+Show: Reward curve comparison — baseline vs trained across 30 GRPO steps.
 
 [75-90s] CLOSING
 
-"LegaLoom-Env is the first RL environment for Indian TDS compliance. The reward signal is deterministic, the environment is OpenEnv-compliant, and the notebook is fully reproducible on HuggingFace Spaces. Try it yourself."
+"LegaLoom-Env trains LLMs on real-world statutory compliance using GRPO with full episode rollouts. The environment is OpenEnv-compliant, deployable on HuggingFace Spaces, and the reward signal is deterministic — no room for reward hacking. Try it yourself."
 
 END

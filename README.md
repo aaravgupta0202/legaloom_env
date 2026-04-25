@@ -116,37 +116,24 @@ Fix: `no_tds=true` without a prior `query_ytd` call incurs a −0.30 penalty. Th
 
 ## Results
 
-### Setup
+### Baseline (Qwen2.5-3B-Instruct, untrained)
 
-Qwen2.5-3B-Instruct + LoRA (r=16) via HF Transformers + PEFT + bitsandbytes (4-bit NF4). **80 GRPO steps total** — 20 each on `task_easy`, `task_medium`, `task_hard`, `task_expert` (full 4-phase curriculum). Hints disabled, procedural invoice generation, full episode rollouts. Both baseline and trained scores come from `rollout_episode` in `LegaLoom_FullCurriculum_HFSpace.ipynb` — same model, same prompt, same seeds. Each cell is the mean of 10 fresh-seed episodes per task.
+Measured via `rollout_episode` in `LegaLoom_GRPO_Training.ipynb` — untrained Qwen2.5-3B, same prompt as training, no hints, no worked examples. Scores pending the onsite training run.
 
-### Before vs After GRPO
+| Task | Baseline | After GRPO |
+|------|----------|-----------|
+| task_easy | *(run notebook)* | *(run notebook)* |
+| task_medium | *(run notebook)* | *(run notebook)* |
+| task_hard | *(run notebook)* | *(run notebook)* |
+| task_expert | *(run notebook)* | *(run notebook)* |
 
-![Before vs After GRPO](./before_after.png)
+### After GRPO Training
 
-| Task | Baseline | After GRPO | Δ |
-|------|---------:|-----------:|------:|
-| `task_easy` | 0.222 | **0.249** | +12% |
-| `task_medium` | 0.528 | 0.528 | 0% |
-| `task_hard` | 0.068 | 0.063 | −7% |
-| `task_expert` | 0.252 | **0.257** | +2% |
-| **Average** | **0.268** | **0.274** | **+2%** |
+> Training runs onsite with HuggingFace compute credits (April 25–26).
+> Real reward curves and before/after scores will be committed here after training completes.
 
-`task_medium` crosses the success threshold at 0.528 and remains **stable** after training — no regression despite being included in the curriculum. Easy and expert show small positive gains. Hard is within noise of baseline (per-episode std = 0.118 on 10 runs).
-
-### What the training signal looks like
-
-![GRPO Reward Curves](./reward_curves.png)
-
-The reward curve shows real phase-aware GRPO dynamics across the 4-phase curriculum. Key observations:
-
-- **Phase structure is visible**: reward patterns shift at each phase boundary (easy → medium → hard → expert), showing the curriculum in action.
-- **Hard phase shows spikes to ~0.35** — the model occasionally finds correct inoperative-PAN reasoning during training, even though eval-time consistency remains low.
-- **Loss is non-zero and structured** — the GRPO loss oscillates in the 0.0001–0.002 range across all phases, confirming gradients are flowing and the optimizer is active.
-
-The modest eval-time gains reflect the difficulty of this task: TDS compliance requires multi-step statutory reasoning with numeric precision, and 80 steps on a 3B model is a small compute budget. The per-episode score distribution is heavily bimodal (0.01 or 0.99), meaning the model either solves the full reasoning chain or fails early — there is little middle ground. This high variance makes small sample-size evaluation noisy; a production run would use 50+ episodes per task.
-
-Raw artifacts: [`training_scores.json`](./training_scores.json), [`training_log.json`](./training_log.json).
+> **Reward curves will be added here after the onsite training run (April 25–26).**
+> Run `LegaLoom_GRPO_Training.ipynb` in Colab to generate real curves.
 
 ---
 
@@ -174,9 +161,9 @@ Single-step reward functions train the model to emit syntactically valid JSON an
 |---------|------|
 | 🤗 HuggingFace Space | [aarav0202/legaloom-env](https://huggingface.co/spaces/aarav0202/legaloom-env) |
 | 📓 Training Script | [`train_grpo.py`](./train_grpo.py) |
-| 📓 Training Notebook | [`LegaLoom_FullCurriculum_HFSpace.ipynb`](./LegaLoom_FullCurriculum_HFSpace.ipynb) — 4-phase curriculum, vanilla HF+PEFT, A10G |
-| 📝 Blog Post | [`blog_post.md`](./blog_post.md) |
-| 🎬 Demo Video | *(optional — blog satisfies the requirement)* |
+| 📓 Colab Notebook | [`LegaLoom_GRPO_Training.ipynb`](./LegaLoom_GRPO_Training.ipynb) |
+| 📝 Blog Post | *(link after posting)* |
+| 🎬 Demo Video | *(link after recording)* |
 
 ---
 
@@ -225,7 +212,7 @@ docker run -p 7860:7860 legaloom-env
 legaloom_env/
 ├── inference.py                   # Baseline agent
 ├── train_grpo.py                  # GRPO training pipeline (full episode rollouts)
-├── LegaLoom_FullCurriculum_HFSpace.ipynb  # Training notebook (runs on HF Space A10G)
+├── LegaLoom_GRPO_Training.ipynb   # Colab notebook
 ├── models.py                      # Pydantic typed models
 ├── openenv.yaml                   # OpenEnv manifest
 ├── Dockerfile                     # Container

@@ -177,15 +177,17 @@ class LegaloomEnvironment(Environment):
             if hasattr(params, "model_dump"):
                 params = params.model_dump(exclude_none=True)
 
-            handlers = {
-                "read_invoice":    self._handle_read_invoice,
-                "check_pan":       self._handle_check_pan,
-                "check_threshold": self._handle_check_threshold,
-                "query_ytd":       self._handle_query_ytd,
-                "lookup_section":  self._handle_lookup_section,
-                "query_law":       self._handle_query_law,
-                "submit_answer":   self._handle_submit_answer,
-            }
+        handlers = {
+            "read_invoice": self._handle_read_invoice,
+            "check_pan": self._handle_check_pan,
+            "check_threshold": self._handle_check_threshold,
+            "query_ytd": self._handle_query_ytd,
+            "lookup_section": self._handle_lookup_section,
+            "query_law": self._handle_query_law,
+            "submit_answer": self._handle_submit_answer,
+            "request_hint": self._handle_request_hint,
+            "validate_reasoning": self._handle_validate_reasoning,
+        }
 
             handler = handlers.get(action_type)
             if handler:

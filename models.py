@@ -46,6 +46,14 @@ class SubmitAnswerParams(_StrictParams):
     no_tds: Optional[Union[bool, Literal["true", "false"]]] = None
 
 
+class RequestHintParams(_StrictParams):
+    detail_level: str = Field(default="basic", pattern="^(basic|detailed|full)$")
+
+
+class ValidateReasoningParams(_StrictParams):
+    reasoning_summary: str = Field(..., min_length=1)
+
+
 class TDSAction(Action):
     """
     One step the agent takes inside the TDS compliance environment.
@@ -55,7 +63,8 @@ class TDSAction(Action):
         ...,
         description=(
             "One of: read_invoice | check_pan | check_threshold "
-            "| query_ytd | lookup_section | query_law | submit_answer"
+            "| query_ytd | lookup_section | query_law | submit_answer "
+            "| request_hint | validate_reasoning"
         ),
     )
     parameters: Union[
@@ -67,6 +76,8 @@ class TDSAction(Action):
         LookupSectionParams,
         QueryLawParams,
         SubmitAnswerParams,
+        RequestHintParams,
+        ValidateReasoningParams,
     ] = Field(default_factory=dict)
 
     @model_validator(mode="before")
@@ -92,12 +103,13 @@ class TDSAction(Action):
             "lookup_section": LookupSectionParams,
             "query_law": QueryLawParams,
             "submit_answer": SubmitAnswerParams,
+            "request_hint": RequestHintParams,
+            "validate_reasoning": ValidateReasoningParams,
         }.get(action)
 
         if parser is not None:
             params = parser.model_validate(params).model_dump(exclude_none=True)
         else:
-            # Keep unknown actions permissive so environment can apply explicit penalties.
             params = params
 
         data["parameters"] = params
@@ -209,4 +221,19 @@ class TDSState(State):
     answer_submitted: bool = Field(
         default=False,
         description="True once agent has called submit_answer.",
+    )
+
+    hints_requested: int = Field(
+        default=0,
+        description="Number of times the agent requested a hint.",
+    )
+
+    reasoning_validated: bool = Field(
+        default=False,
+        description="True once agent called validate_reasoning.",
+    )
+
+    reasoning_gaps: List[str] = Field(
+        default_factory=list,
+        description="Identified reasoning gaps from validate_reasoning.",
     )

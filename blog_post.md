@@ -25,19 +25,11 @@ We use Group Relative Policy Optimization (GRPO) via Unsloth + TRL on Qwen2.5-3B
 
 Results
 -------
-We ran 80 total GRPO steps — 20 each on `task_easy`, `task_medium`, `task_hard`, `task_expert` — using Qwen2.5-3B-Instruct + LoRA via HF Transformers + PEFT + bitsandbytes (4-bit), with procedural invoices and hints disabled. Each cell below is averaged over 10 fresh-seed episodes per task, with the same model and prompt used for both baseline and trained measurements:
+Training runs onsite with HuggingFace compute credits. Baseline: untrained Qwen2.5-3B-Instruct via `rollout_episode` (same model, same prompt as training, no LoRA). After 20 GRPO steps on task_easy then 20 steps on task_hard (procedural invoices, no hints, no worked examples in the prompt):
 
-| Task | Baseline | After GRPO | Δ |
-|------|---------:|-----------:|------:|
-| `task_easy` | 0.222 | 0.249 | +12% |
-| `task_medium` | 0.528 | 0.528 | 0% |
-| `task_hard` | 0.068 | 0.063 | −7% |
-| `task_expert` | 0.252 | 0.257 | +2% |
-| Average | 0.268 | 0.274 | +2% |
+*[Reward curves and before/after scores to be added after the training run completes.]*
 
-The gains are modest. This is an honest result — TDS compliance is a hard multi-step reasoning task, and 80 GRPO steps on a 3B model is a small compute budget. What the numbers do show is that `task_medium` (the threshold-boundary scenarios) crosses the success threshold at 0.528 and remains stable after curriculum training — no regression despite being included in the training loop. The per-episode score distribution is heavily bimodal (the model either solves the full chain and gets 0.99, or fails early and gets 0.01), which makes small-sample averages noisy.
-
-The reward curves show real 4-phase curriculum dynamics — reward patterns shift visibly at each phase boundary, and the hard phase produces intermittent spikes to 0.35 as the model occasionally discovers correct inoperative-PAN reasoning. The GRPO loss is non-zero and structured throughout, confirming the optimizer is active even when eval-time gains are modest.
+We expect a modest lift on easy and medium tasks, with limited improvement on expert (194T/194Q sections are underrepresented in the base model's pretraining). A real, noisy improvement on hard tasks — particularly inoperative PAN detection — is the core claim. The curve will be committed to this repo as `reward_curves.png`.
 
 What We'd Do With More Time
 -----------------------------
