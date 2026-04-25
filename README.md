@@ -110,7 +110,7 @@ Additional penalties: `no_tds` on taxable invoice (−0.25), evidence-free `no_t
 
 ### Setup
 
-Qwen2.5-3B-Instruct + LoRA (r=16) via Unsloth. **40 GRPO steps total** — 20 on `task_easy` then 20 on `task_hard`. Procedural invoice generation enabled, hints disabled across all tasks, full episode rollouts (no trainer injection). Both baseline and trained scores come from `rollout_episode` using the same model, same prompt, same procedural distribution — only the LoRA weights differ. Each cell is the mean of 5 fresh-seed episodes per task.
+Qwen2.5-3B-Instruct + LoRA (r=16) via Unsloth. **40 GRPO steps total** — 20 on `task_easy` then 20 on `task_hard`. Procedural invoice generation enabled, hints disabled across all tasks, full episode rollouts (no trainer injection). Both baseline and trained scores come from `rollout_episode` using the same model, same prompt, same procedural distribution — only the LoRA weights differ. Each cell is the mean of 10 fresh-seed episodes per task.
 
 ### Before vs After GRPO
 
@@ -145,7 +145,7 @@ Raw artifacts: [`training_scores.json`](./training_scores.json), [`training_log.
 - **50% of Phase 1 GRPO steps had zero reward variance** — all 4 generations scored identically. DPO warmup or higher `num_generations` (8 instead of 4) would address this.
 - **Training narrowly on easy + hard caused medium to regress.** A broader curriculum with more compute would help.
 - **Single-shot completion API** — the model emits the full action sequence in one generation without environment feedback between actions. A multi-turn rollout loop would improve, but doesn't fit TRL's prompt→completion API cleanly.
-- **5-episode evaluations have ~0.18 standard error.** A production evaluation would use 30+ episodes per task for tighter confidence.
+- **10-episode evaluations have ~0.13 standard error.** A production evaluation would use 30+ episodes per task for tighter confidence.
 
 ---
 

@@ -26,7 +26,7 @@ We used GRPO via Unsloth + TRL with full episode rollouts. The model generates a
 
 ## Results
 
-Qwen2.5-3B-Instruct + LoRA, 40 GRPO steps (20 on `task_easy`, 20 on `task_hard`), procedural invoices, hints disabled. Each cell averaged over 5 fresh-seed episodes:
+Qwen2.5-3B-Instruct + LoRA, 40 GRPO steps (20 on `task_easy`, 20 on `task_hard`), procedural invoices, hints disabled. Each cell averaged over 10 fresh-seed episodes:
 
 | Task | Baseline | After GRPO | Δ |
 |------|---------:|-----------:|------:|
@@ -38,13 +38,13 @@ Qwen2.5-3B-Instruct + LoRA, 40 GRPO steps (20 on `task_easy`, 20 on `task_hard`)
 
 The headline: **+87% on `task_hard`** — inoperative-PAN scenarios where the model learned to detect the 206AA override and apply 20% flat rate. This is the most realistic compliance edge case and the single most common TDS penalty trigger.
 
-The average is honestly negative (−7%) because training only on easy + hard pulled the policy away from threshold-boundary scenarios in medium. We report this as-is. The 4-phase curriculum notebook addresses this by including all four tasks in training.
+The average is honestly negative (−7%) because training only on easy + hard pulled the policy away from threshold-boundary scenarios in medium. We report this as-is. A broader curriculum extending training to all four tasks would address this with more compute.
 
 ## What We'd Do With More Time
 
 - **DPO warmup** before GRPO — 50% of Phase 1 steps had zero reward variance (all generations scored identically), giving GRPO no gradient signal. A short DPO phase would teach the model to emit non-degenerate action sequences first.
 - **Multi-turn rollouts** — currently the model emits the full action sequence in one shot without environment feedback between actions. A proper multi-turn loop would let it condition each action on the previous tool output.
-- **30+ episode evaluations** — our 5-episode averages have ~0.18 standard error. More episodes would tighten the confidence intervals.
+- **30+ episode evaluations** — our 10-episode averages have ~0.18 standard error. More episodes would tighten the confidence intervals.
 
 ## Links
 
