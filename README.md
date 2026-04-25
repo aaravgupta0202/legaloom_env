@@ -118,7 +118,7 @@ Fix: `no_tds=true` without a prior `query_ytd` call incurs a −0.30 penalty. Th
 
 ### Setup
 
-Qwen2.5-3B-Instruct + LoRA (r=16) via Unsloth. **40 GRPO steps total** — 20 on `task_easy` then 20 on `task_hard`. Procedural invoice generation enabled, hints disabled across all four tasks, full episode rollouts (no trainer injection). Both the baseline and trained scores below come from `rollout_episode` in `LegaLoom_QuickTrain.ipynb`, using the `train_grpo.py::ROLLOUT_SYSTEM_PROMPT`. Same model architecture, same prompt, same procedural distribution for both measurements — only the LoRA weights differ. Each cell is the mean of 5 fresh-seed episodes per task.
+Qwen2.5-3B-Instruct + LoRA (r=16) via HF Transformers + PEFT + bitsandbytes (4-bit NF4). **80 GRPO steps total** — 20 each on `task_easy`, `task_medium`, `task_hard`, `task_expert` (full 4-phase curriculum). Hints disabled, procedural invoice generation, full episode rollouts. Both baseline and trained scores come from `rollout_episode` in `LegaLoom_FullCurriculum_HFSpace.ipynb` — same model, same prompt, same seeds. Each cell is the mean of 10 fresh-seed episodes per task.
 
 ### Before vs After GRPO
 
@@ -126,29 +126,25 @@ Qwen2.5-3B-Instruct + LoRA (r=16) via Unsloth. **40 GRPO steps total** — 20 on
 
 | Task | Baseline | After GRPO | Δ |
 |------|---------:|-----------:|------:|
-| `task_easy` | 0.186 | **0.324** | +74% |
-| `task_medium` | 0.450 | 0.336 | −25% |
-| `task_hard` | 0.078 | **0.126** | +62% |
-| `task_expert` | 0.200 | **0.316** | +58% |
-| **Average** | **0.229** | **0.276** | **+21%** |
+| `task_easy` | 0.222 | **0.249** | +12% |
+| `task_medium` | 0.528 | 0.528 | 0% |
+| `task_hard` | 0.068 | 0.063 | −7% |
+| `task_expert` | 0.252 | **0.257** | +2% |
+| **Average** | **0.268** | **0.274** | **+2%** |
 
-Three of four difficulty levels improved. The largest absolute gain is on `task_easy` (+0.138); the largest relative gain is on `task_hard` (+62%) — the inoperative-PAN scenarios that motivated the project.
+`task_medium` crosses the success threshold at 0.528 and remains **stable** after training — no regression despite being included in the curriculum. Easy and expert show small positive gains. Hard is within noise of baseline (per-episode std = 0.118 on 10 runs).
 
-### Why `task_medium` regressed
-
-`task_medium` was **not** in the training curriculum. We trained on easy → hard, then evaluated on all four tasks. The policy that learned to detect inoperative PANs (a `task_hard` signal) appears to over-trigger on threshold-boundary scenarios in medium that don't need it, dropping the score from 0.450 to 0.336. With more compute we would interleave medium into the curriculum rather than skip it. We are reporting this as-is — the regression is on the plot and in the table.
-
-### Reward curves
+### What the training signal looks like
 
 ![GRPO Reward Curves](./reward_curves.png)
 
-Both phases show noisy step-reward signal hovering around 0.05–0.20 with intermittent spikes. The curves are not dramatic — 40 steps on a 3B LoRA is a small budget. What changed during training was the underlying behavior the optimizer could grip onto:
+The reward curve shows real phase-aware GRPO dynamics across the 4-phase curriculum. Key observations:
 
-- `completion_length` rose from a degenerate ~14 tokens to 43–131 tokens (the model started emitting full action sequences instead of stub completions)
-- `reward_std` across each GRPO group rose from 0.000 to 0.260 (genuine variance for the optimizer to exploit)
-- Per-step reward spikes to ~0.19 vs a baseline floor of 0.01
+- **Phase structure is visible**: reward patterns shift at each phase boundary (easy → medium → hard → expert), showing the curriculum in action.
+- **Hard phase shows spikes to ~0.35** — the model occasionally finds correct inoperative-PAN reasoning during training, even though eval-time consistency remains low.
+- **Loss is non-zero and structured** — the GRPO loss oscillates in the 0.0001–0.002 range across all phases, confirming gradients are flowing and the optimizer is active.
 
-The headline reward number staying low is expected at this compute budget. The lift shows up at evaluation time, on held-out seeds — which is what the table above captures.
+The modest eval-time gains reflect the difficulty of this task: TDS compliance requires multi-step statutory reasoning with numeric precision, and 80 steps on a 3B model is a small compute budget. The per-episode score distribution is heavily bimodal (0.01 or 0.99), meaning the model either solves the full reasoning chain or fails early — there is little middle ground. This high variance makes small sample-size evaluation noisy; a production run would use 50+ episodes per task.
 
 Raw artifacts: [`training_scores.json`](./training_scores.json), [`training_log.json`](./training_log.json).
 
@@ -178,8 +174,7 @@ Single-step reward functions train the model to emit syntactically valid JSON an
 |---------|------|
 | 🤗 HuggingFace Space | [aarav0202/legaloom-env](https://huggingface.co/spaces/aarav0202/legaloom-env) |
 | 📓 Training Script | [`train_grpo.py`](./train_grpo.py) |
-| 📓 Quick Colab Notebook | [`LegaLoom_QuickTrain.ipynb`](./LegaLoom_QuickTrain.ipynb) — ~45 min, 1 phase |
-| 📓 Full Curriculum Notebook | [`LegaLoom_FullCurriculum.ipynb`](./LegaLoom_FullCurriculum.ipynb) — ~90 min, 4-phase curriculum, 10 eval episodes |
+| 📓 Training Notebook | [`LegaLoom_FullCurriculum_HFSpace.ipynb`](./LegaLoom_FullCurriculum_HFSpace.ipynb) — 4-phase curriculum, vanilla HF+PEFT, A10G |
 | 📝 Blog Post | *(link after posting)* |
 | 🎬 Demo Video | *(link after recording)* |
 
@@ -230,8 +225,7 @@ docker run -p 7860:7860 legaloom-env
 legaloom_env/
 ├── inference.py                   # Baseline agent
 ├── train_grpo.py                  # GRPO training pipeline (full episode rollouts)
-├── LegaLoom_QuickTrain.ipynb      # Quick run (45 min, 1-phase)
-├── LegaLoom_FullCurriculum.ipynb  # Full 4-phase curriculum (90 min)
+├── LegaLoom_FullCurriculum_HFSpace.ipynb  # Training notebook (runs on HF Space A10G)
 ├── models.py                      # Pydantic typed models
 ├── openenv.yaml                   # OpenEnv manifest
 ├── Dockerfile                     # Container

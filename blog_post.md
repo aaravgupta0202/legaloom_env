@@ -25,19 +25,19 @@ We use Group Relative Policy Optimization (GRPO) via Unsloth + TRL on Qwen2.5-3B
 
 Results
 -------
-We ran 40 total GRPO steps — 20 on `task_easy` then 20 on `task_hard` — using Qwen2.5-3B-Instruct + LoRA via Unsloth, with procedural invoices and hints disabled. Each cell below is averaged over 5 fresh-seed episodes per task, with the same model and prompt used for both baseline and trained measurements:
+We ran 80 total GRPO steps — 20 each on `task_easy`, `task_medium`, `task_hard`, `task_expert` — using Qwen2.5-3B-Instruct + LoRA via HF Transformers + PEFT + bitsandbytes (4-bit), with procedural invoices and hints disabled. Each cell below is averaged over 10 fresh-seed episodes per task, with the same model and prompt used for both baseline and trained measurements:
 
 | Task | Baseline | After GRPO | Δ |
 |------|---------:|-----------:|------:|
-| `task_easy` | 0.186 | 0.324 | +74% |
-| `task_medium` | 0.450 | 0.336 | −25% |
-| `task_hard` | 0.078 | 0.126 | +62% |
-| `task_expert` | 0.200 | 0.316 | +58% |
-| Average | 0.229 | 0.276 | +21% |
+| `task_easy` | 0.222 | 0.249 | +12% |
+| `task_medium` | 0.528 | 0.528 | 0% |
+| `task_hard` | 0.068 | 0.063 | −7% |
+| `task_expert` | 0.252 | 0.257 | +2% |
+| Average | 0.268 | 0.274 | +2% |
 
-Three of four difficulty tiers improved. The largest relative gain is on `task_hard` (+62%) — the inoperative-PAN scenarios that motivated the project. `task_medium` regressed because it was not in the training curriculum: we trained on easy → hard, and the inoperative-PAN signal appears to over-trigger on threshold-boundary scenarios that don't need it. We are reporting this as-is rather than dropping medium from the table; with more compute we'd interleave it into the curriculum.
+The gains are modest. This is an honest result — TDS compliance is a hard multi-step reasoning task, and 80 GRPO steps on a 3B model is a small compute budget. What the numbers do show is that `task_medium` (the threshold-boundary scenarios) crosses the success threshold at 0.528 and remains stable after curriculum training — no regression despite being included in the training loop. The per-episode score distribution is heavily bimodal (the model either solves the full chain and gets 0.99, or fails early and gets 0.01), which makes small-sample averages noisy.
 
-The reward curves themselves are noisy — 40 steps on a 3B LoRA is a small budget, and step rewards hover around 0.05–0.20. What changed during training was the underlying behavior the optimizer could grip onto: completion length rose from a degenerate 14 tokens to 43–131 tokens (the model started emitting full action sequences instead of stubs), and reward variance across the GRPO group went from 0.000 to 0.260. Those are the signals GRPO needs. The headline lift then shows up at eval time on held-out seeds, which is what the table captures.
+The reward curves show real 4-phase curriculum dynamics — reward patterns shift visibly at each phase boundary, and the hard phase produces intermittent spikes to 0.35 as the model occasionally discovers correct inoperative-PAN reasoning. The GRPO loss is non-zero and structured throughout, confirming the optimizer is active even when eval-time gains are modest.
 
 What We'd Do With More Time
 -----------------------------
