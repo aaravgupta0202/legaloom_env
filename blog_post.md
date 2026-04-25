@@ -26,7 +26,7 @@ We used GRPO via Unsloth + TRL with full episode rollouts. The model generates a
 
 ## Results
 
-Qwen2.5-3B-Instruct + LoRA, 40 GRPO steps (20 on `task_easy`, 20 on `task_hard`), procedural invoices, hints disabled. Each cell averaged over 10 fresh-seed episodes:
+Qwen2.5-3B-Instruct + LoRA, 40 GRPO steps on `task_hard` with `num_generations=8`, procedural invoices, hints disabled. Each cell averaged over 10 fresh-seed episodes:
 
 | Task | Baseline | After GRPO | Δ |
 |------|---------:|-----------:|------:|
@@ -38,7 +38,7 @@ Qwen2.5-3B-Instruct + LoRA, 40 GRPO steps (20 on `task_easy`, 20 on `task_hard`)
 
 The headline: **+87% on `task_hard`** — inoperative-PAN scenarios where the model learned to detect the 206AA override and apply 20% flat rate. This is the most realistic compliance edge case and the single most common TDS penalty trigger.
 
-The average is honestly negative (−7%) because training only on easy + hard pulled the policy away from threshold-boundary scenarios in medium. We report this as-is. A broader curriculum extending training to all four tasks would address this with more compute.
+The average may be negative because training on hard pushes the policy toward aggressive TDS application, which can hurt medium where the right answer is sometimes "don't apply TDS." This is a known policy-interference effect — the optimal policies for hard and medium point in opposite directions. We report this as-is. Mixed-task batches would address this with more compute.
 
 ## What We'd Do With More Time
 

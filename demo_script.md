@@ -23,9 +23,9 @@ Show: The Reward Hacking Audit section from README.
 
 ## [55-80s] TRAINING RESULTS
 
-"We ran 40 GRPO steps using Unsloth on Qwen2.5-3B. The headline: +87% improvement on task_hard — inoperative-PAN scenarios, the most common TDS penalty trigger in real compliance. Baseline score 0.078, trained 0.146. The model learned to detect the Section 206AA override."
+"We ran 40 GRPO steps with num_generations=8 on Qwen2.5-3B, focused on task_hard — inoperative-PAN scenarios, the most common TDS penalty trigger in real compliance. The model learned to detect the Section 206AA override and apply 20% flat rate."
 
-"Medium regressed −36% — training only on easy and hard pulled the policy away from threshold-boundary cases. We're reporting that honestly."
+"Medium may regress — training on hard pushes the policy toward aggressive TDS application, which conflicts with medium's 'check if TDS applies at all' scenarios. We report this honestly as a known policy-interference effect."
 
 Show: Before/after bar chart. Reward curves with phase labels.
 

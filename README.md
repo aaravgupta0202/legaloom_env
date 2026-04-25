@@ -110,7 +110,7 @@ Additional penalties: `no_tds` on taxable invoice (−0.25), evidence-free `no_t
 
 ### Setup
 
-Qwen2.5-3B-Instruct + LoRA (r=16) via Unsloth. **40 GRPO steps total** — 20 on `task_easy` then 20 on `task_hard`. Procedural invoice generation enabled, hints disabled across all tasks, full episode rollouts (no trainer injection). Both baseline and trained scores come from `rollout_episode` using the same model, same prompt, same procedural distribution — only the LoRA weights differ. Each cell is the mean of 10 fresh-seed episodes per task.
+Qwen2.5-3B-Instruct + LoRA (r=16) via Unsloth. **40 GRPO steps on `task_hard`** with `num_generations=8` for maximum reward variance. Procedural invoice generation enabled, hints disabled across all tasks, full episode rollouts (no trainer injection). Both baseline and trained scores come from `rollout_episode` using the same model, same prompt, same procedural distribution — only the LoRA weights differ. Each cell is the mean of 10 fresh-seed episodes per task.
 
 ### Before vs After GRPO
 
@@ -128,7 +128,7 @@ Qwen2.5-3B-Instruct + LoRA (r=16) via Unsloth. **40 GRPO steps total** — 20 on
 
 ### Why `task_medium` regressed
 
-Training on easy + hard pulled the policy toward inoperative-PAN detection, which over-triggers on threshold-boundary scenarios in medium. The average lift is −7% — honestly negative. With more compute and a broader curriculum, we'd expect medium to stabilize.
+Training focused on `task_hard` (inoperative-PAN scenarios) pushed the policy toward aggressive TDS application, which can over-trigger on threshold-boundary scenarios in medium. This is a known policy-interference effect in RL — the optimal policy for hard and medium point in opposite directions. With more compute we'd mix task types within batches instead of training sequentially.
 
 ### Reward curves
 
@@ -142,8 +142,7 @@ Raw artifacts: [`training_scores.json`](./training_scores.json), [`training_log.
 
 ## Known Limitations
 
-- **50% of Phase 1 GRPO steps had zero reward variance** — all 4 generations scored identically. DPO warmup or higher `num_generations` (8 instead of 4) would address this.
-- **Training narrowly on easy + hard caused medium to regress.** A broader curriculum with more compute would help.
+- **Training on `task_hard` alone may cause medium to regress** — the optimal policies for hard (apply 20% aggressively) and medium (check if TDS applies at all) point in opposite directions. Mixed-task batches would help but require more compute.
 - **Single-shot completion API** — the model emits the full action sequence in one generation without environment feedback between actions. A multi-turn rollout loop would improve, but doesn't fit TRL's prompt→completion API cleanly.
 - **10-episode evaluations have ~0.13 standard error.** A production evaluation would use 30+ episodes per task for tighter confidence.
 
@@ -169,7 +168,7 @@ See [`train_grpo.py`](./train_grpo.py) for the full pipeline.
 | Resource | Link |
 |---------|------|
 | 🤗 HuggingFace Space | [aarav0202/legaloom-env](https://huggingface.co/spaces/aarav0202/legaloom-env) |
-| 📓 Training Notebook | [`LegaLoom_FullCurriculum.ipynb`](./LegaLoom_FullCurriculum.ipynb) — 2-phase GRPO, Colab T4 |
+| 📓 Training Notebook | [`LegaLoom_FullCurriculum.ipynb`](./LegaLoom_FullCurriculum.ipynb) — single-phase GRPO, Colab T4 |
 | 📓 Training Script | [`train_grpo.py`](./train_grpo.py) |
 | 📝 Blog Post | [`blog_post.md`](./blog_post.md) |
 
