@@ -403,7 +403,10 @@ def run_training(
 
     def make_reward_fn(tid):
         def fn(prompts, completions, **kwargs):
-            return episode_reward_fn(prompts, completions, task_id=tid, **kwargs)
+            # Strip task_id from kwargs to avoid "multiple values" collision
+            # TRL passes dataset columns as kwargs; we override with our tid
+            clean_kwargs = {k: v for k, v in kwargs.items() if k != "task_id"}
+            return episode_reward_fn(prompts, completions, task_id=tid, **clean_kwargs)
         return fn
 
     grpo_config = GRPOConfig(
