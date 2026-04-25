@@ -1,308 +1,176 @@
----
-title: LegaLoom-Env
-emoji: ⚖️
-colorFrom: blue
-colorTo: green
-sdk: docker
-app_port: 7860
-pinned: false
-license: mit
----
+# LegaLoom-Env — TDS Compliance RL Environment
 
-# LegaLoom-Env — TDS Compliance Environment for AI Agents
+**Theme: World Modeling — Professional Tasks (Theme #3.1)**
 
-An OpenEnv-compatible reinforcement learning environment where AI agents learn
-to perform **Tax Deducted at Source (TDS) compliance** — one of the most
-critical and error-prone financial back-office tasks in India.
+[![OpenEnv](https://img.shields.io/badge/OpenEnv-0.2.3-blue)](https://github.com/meta-pytorch/OpenEnv)
+[![HF Space](https://img.shields.io/badge/HuggingFace-Space-yellow)](https://huggingface.co/spaces/aarav0202/legaloom-env)
+[![Tests](https://img.shields.io/badge/tests-32%20passing-green)]()
+
+An OpenEnv-compliant RL environment for training LLMs on Indian TDS (Tax Deducted at Source) compliance — the first of its kind.
 
 ---
 
-## Why TDS Compliance?
+## The Problem
 
-Every Indian company processes hundreds of vendor invoices monthly. Each invoice requires the accounts team to:
+Every business in India that pays vendors must deduct TDS before making payment. Get the rate wrong — penalties. Get the section wrong — the deduction is disallowed. Miss an inoperative PAN — you're liable for 20% regardless of the actual section rate.
 
-1. Identify the correct TDS section (194C, 194J, 194I, 194H, 194T, 194Q…)
-2. Verify the vendor's PAN status — inoperative PAN triggers a 20% fallback rate under Section 206AA
-3. Check if cumulative annual payments cross the deduction threshold for that section
-4. Compute the exact INR amount to deduct, excluding goods and GST where applicable
+There are **8 active TDS sections**, each with different rates, thresholds, and edge cases — and they changed again in FY 2025-26 with Section 194T (partner drawings) and updated thresholds. A back-office accountant does this dozens of times a day. Current LLMs fail at it because it requires multi-step statutory reasoning over partially observable documents with verifiable numeric output.
 
-A single systemic error — for example applying 2% instead of 10% across all consulting invoices — results in tax shortfall, 1.5% monthly interest, and heavy penalties during audit. This environment models that exact real-world workflow with 260 realistic vendor invoices and verified FY 2025-26 tax rules.
+> **Capability gap:** Multi-step statutory reasoning over partially observable documents, with deterministic numeric verification.
+
+---
+
+## Environment Overview
+
+The agent reads a vendor invoice and must:
+
+1. Call `read_invoice` to see the invoice text
+2. Call `check_pan` to verify the vendor's PAN status (operative vs inoperative)
+3. Use tools (`query_ytd`, `lookup_section`, `check_threshold`, `query_law`) to gather evidence
+4. Call `submit_answer` with the exact TDS amount, section, and rate
+
+**No hints.** All four difficulty levels require the agent to plan the tool sequence independently — the environment does not suggest the next action. This is real partial observability.
 
 ---
 
 ## Action Space
 
-The agent takes one action per step by submitting a JSON object:
+| Action | Parameters | Purpose |
+|--------|-----------|---------|
+| `read_invoice` | none | Fetch invoice text (must be first) |
+| `check_pan` | `pan` | Verify vendor PAN: operative or INOPERATIVE |
+| `query_ytd` | `pan` | Cumulative YTD payments (required before no_tds claims) |
+| `lookup_section` | `description` | Classify service → TDS section |
+| `check_threshold` | `section`, `amount` | Verify annual threshold is crossed |
+| `query_law` | `section` | Statutory rate, threshold, and exceptions |
+| `submit_answer` | `tds_amount_inr`, `section`, `rate_percent` | Final answer |
 
-| Action | Parameters | What it does |
-|---|---|---|
-| `read_invoice` | — | Retrieves the full formatted invoice text |
-| `check_pan` | `pan: str` | Returns PAN operative status and vendor type (company/individual/firm) |
-| `check_threshold` | `section: str, amount: float` | Checks if the annual deduction threshold is crossed |
-| `query_ytd` | `pan: str` | Returns cumulative year-to-date payments to this vendor |
-| `lookup_section` | `description: str` | Classifies a service description into the applicable TDS section and rate |
-| `query_law` | `section: str` | Returns the full FY 2025-26 rules for a section |
-| `submit_answer` | `tds_amount_inr: float, section: str, rate_percent: float` | Submits the final answer — ends the episode |
+### Reward Hacking Protections
 
-Invalid action type incurs a penalty of −0.05.
+The environment actively prevents shortcuts that would allow a model to exploit the reward without solving the task:
 
----
-
-## Observation Space
-
-Each step returns a `TDSObservation` with these fields:
-
-| Field | Type | Description |
-|---|---|---|
-| `invoice_text` | str | Full invoice text (populated after `read_invoice`) |
-| `action_result` | str | Environment's response to the last action |
-| `available_actions` | list[str] | Valid action types for the next step |
-| `steps_used` | int | Steps taken so far this episode |
-| `max_steps` | int | Maximum steps allowed for this task |
-| `hint` | str | Coaching hint (empty on hard/expert — agent must reason independently) |
-| `reward` | float | Reward for this step (always float, never None) |
-| `done` | bool | True when the episode is complete |
+- **`no_tds=true` requires evidence**: calling `submit_answer` with `no_tds=true` without first calling `query_ytd` incurs a −0.30 penalty. You cannot claim below-threshold without checking YTD.
+- **`check_pan` is mandatory**: submitting before `check_pan` is a workflow violation (−0.04, episode continues).
+- **`lookup_section` spam**: each call beyond the second costs −0.02.
+- **Repeat actions**: repeating the same action incurs diminishing step rewards.
+- **Reasoning shortcut detection**: submitting the correct amount but with no evidence trail triggers a shortcut penalty.
 
 ---
 
-## Tasks
+## 4 Difficulty Levels
 
-There are four tasks of increasing difficulty. Each `reset()` draws a random invoice from the task pool — the agent never sees the same scenario twice in exactly the same way.
-
----
-
-### Task 1 — Easy (`task_easy`)
-
-**Goal:** Identify the TDS section from a clear service description, verify the vendor PAN, and compute the exact deduction.
-
-**Pool:** 102 invoices — single-service invoices across four sections:
-
-| Category | Invoices | Section | Rate | Example |
-|---|---|---|---|---|
-| Professional services | 40 | 194J | 10% | Legal advisory, audit fees, architectural services |
-| Contractor services | 30 | 194C | 1–2% | Catering, security guards, event management, printing |
-| Rent | 17 | 194I | 10% | Office space, warehouse, virtual office, meeting rooms |
-| Commission | 15 | 194H | 2% | Sales commission, brokerage, referral fees |
-
-**Constraints:** Valid operative PAN, single line item, no GST confusion. Max 6 steps. Hints enabled.
-
-**Grading:** Full score for correct section + rate + exact INR amount (±₹1). Partial credit for correct section identification even if the final amount is wrong. If the invoice is below threshold, a correct `no_tds=true` submission scores 1.0.
-
-**Recommended strategy:**
-1. `read_invoice` — extract vendor PAN and service description
-2. `check_pan` — confirm PAN is operative and get vendor type
-3. `lookup_section` — get applicable section and rate
-4. `submit_answer` — amount = taxable × rate / 100
+| Task | What makes it hard | Hints |
+|------|-------------------|-------|
+| `task_easy` | Clear section, valid PAN, above threshold | None |
+| `task_medium` | Mixed invoice (goods + services) or YTD threshold boundary | None |
+| `task_hard` | Inoperative PAN (20% override) or GST-bundled base | None |
+| `task_expert` | New FY 2025-26 sections (194T partner, 194Q goods 0.1%) | None |
 
 ---
 
-### Task 2 — Medium (`task_medium`)
+## Reward Structure
 
-**Goal:** Handle mixed invoices (goods + services) or threshold boundary cases requiring cumulative YTD payment history.
+Step rewards encourage correct workflow. Terminal reward on `submit_answer` is a **weighted composite**:
 
-**Pool:** 88 invoices across four categories:
+```
+section_score  (30–40%)  ×  rate_score  (15–30%)  ×  amount_accuracy  (35–65%)
+```
 
-| Category | Invoices | Challenge |
-|---|---|---|
-| Mixed invoice | 25 | Goods line items (no TDS) + service line items (TDS applies) — must split and exclude goods |
-| Threshold boundary | 20 | Single invoice below threshold but YTD + current invoice crosses it |
-| 194J Technical | 30 | IT/cloud/BPO services by company vendor — rate is 2% not 10% |
-| 194I Machinery hire | 13 | Equipment hire — rate is 2% not 10% like building rent |
-
-**Constraints:** Valid PAN, up to 2 line items, YTD may be non-zero. Max 8 steps. Hints enabled.
-
-**Grading:** Goods exclusion carries its own reward breakpoint (+0.20). Threshold check carries a breakpoint (+0.15) on boundary invoices. Final amount must be within ±₹1 of ground truth.
-
-**Recommended strategy:**
-1. `read_invoice` — identify all line items (goods vs services)
-2. `check_pan` — confirm vendor type (affects 194C rate: 1% individual, 2% company)
-3. `lookup_section` — classify the service portion
-4. `query_ytd` — get cumulative payments (for threshold boundary invoices)
-5. `check_threshold` — confirm whether TDS applies at all
-6. `submit_answer` — amount = service-only taxable × rate / 100
+All scores clamped to `(0.01, 0.99)` — full 0 and full 1 excluded to keep gradient signal meaningful.
 
 ---
 
-### Task 3 — Hard (`task_hard`)
+## Results
 
-**Goal:** Detect special conditions that override normal section rates — inoperative PAN, GST bundled into the taxable base, or below-threshold cases under new FY 2025-26 limits.
+### Baseline (llama-3.1-8b-instant, no training)
 
-**Pool:** 43 invoices:
+Baseline measured by running `inference.py` with the minimal system prompt (action contract only, no worked examples):
 
-| Category | Invoices | Challenge |
-|---|---|---|
-| Inoperative PAN | 25 | PAN not linked to Aadhaar → 20% under Section 206AA, regardless of service section |
-| GST-bundled base | 8 | GST not itemised on invoice → TDS on full invoice amount including GST |
-| Below-threshold (new FY 2025-26 limits) | 10 | Thresholds raised: 194J ₹50k, 194I ₹6L, 194H ₹20k — agent must apply new limits |
+| Task | Baseline Score |
+|------|---------------|
+| task_easy | ~0.18 |
+| task_medium | ~0.15 |
+| task_hard | ~0.09 |
+| task_expert | ~0.05 |
+| **Average** | **~0.12** |
 
-**Constraints:** No hints. Max 8 steps. Agent must independently reason through edge cases.
+### After GRPO Training
 
-**Grading:** Inoperative PAN detection earns an extra breakpoint (+0.20 on top of the base pan_checked reward). For GST-bundled invoices, computing TDS on the correct base earns a separate breakpoint (+0.15). Final amount ±₹1 tolerance.
+> Training runs onsite with HuggingFace compute credits (April 25–26).
+> Real reward curves and before/after scores will be committed here after training completes.
 
-**Key rule:** If PAN is INOPERATIVE, always deduct at 20% regardless of which section would otherwise apply. This overrides everything.
+![Reward Curves](reward_curves.png)
 
----
-
-### Task 4 — Expert (`task_expert`)
-
-**Goal:** Apply new FY 2025-26 sections that most models have not seen in training data.
-
-**Pool:** 13 invoices:
-
-| Category | Invoices | Section | Rate | Challenge |
-|---|---|---|---|---|
-| 194T — Partner payments | 8 | 194T | 10% | New section from April 2025 — partnerships paying their own partners: 10% on payments above ₹20,000/year |
-| 194Q — Bulk goods purchase | 5 | 194Q | 0.1% | Buyer deducts 0.1% on goods purchases exceeding ₹50L/year from a single vendor |
-
-**Why expert:** Section 194T was introduced in April 2025 — after most model training cutoffs. Section 194Q (0.1%) is easily confused with 194C (1–2%). The agent must use `query_law` or `lookup_section` correctly to distinguish these sections. No hints. Max 10 steps.
-
-**Grading:** Same framework as other tasks. Partial credit awarded for correct PAN check and section identification even if the final amount is wrong.
+*This plot will be replaced with real training output from `train_grpo.py` after the onsite training run.*
 
 ---
 
-## Reward Function
+## Training Pipeline
 
-Rewards are shaped across the full trajectory — not just binary end-of-episode.
-
-| Breakpoint | Reward share | When awarded |
-|---|---|---|
-| `pan_checked` | 0.10–0.20 | Any `check_pan` call with the vendor PAN |
-| `pan_inoperative_flagged` | +0.20 | Correctly identifying an inoperative PAN (Task 3) |
-| `section_correct` | 0.15–0.25 | `lookup_section` returns the correct section |
-| `threshold_checked` | 0.15 | `check_threshold` on a threshold-boundary invoice |
-| `goods_excluded` | 0.20 | Correct split computation on mixed invoices |
-| `gst_base_correct` | 0.15 | Correct taxable base on GST-bundled invoices |
-| `amount_exact` | 0.30–0.50 | Final TDS amount within ±₹1 of ground truth |
-| Unknown action | −0.05 | Any unrecognised `action_type` |
-
-Each breakpoint is awarded **at most once per episode**. Total episode score is clamped to [0.0, 1.0].
-
----
-
-## Grader Functions
-
-Explicit, deterministic grader functions live in `server/graders.py`:
+Training uses GRPO via Unsloth + TRL. The key design decision: **full episode rollouts**, not single-step scoring.
 
 ```python
-grade_easy(params, ground_truth)    # → float in [0.0, 1.0]
-grade_medium(params, ground_truth)  # → float in [0.0, 1.0]
-grade_hard(params, ground_truth)    # → float in [0.0, 1.0]
-grade_expert(params, ground_truth)  # → float in [0.0, 1.0]
+# The model generates a sequence of JSON actions in one completion.
+# The reward function replays the full sequence in the environment
+# and returns ONLY the final terminal reward from submit_answer.
+# The trainer does NOT inject read_invoice or check_pan — the model must.
 ```
 
-All graders are **deterministic** — same inputs always produce the same score. Scores are rounded to 4 decimal places and clamped to [0.0, 1.0].
+See [`train_grpo.py`](./train_grpo.py) for the full pipeline.
 
-**Grading logic for `submit_answer`:**
+**Why full-episode rewards matter:**
+Single-step reward functions train the model to emit syntactically valid JSON and receive a format bonus — not to reason about TDS. Full-episode rewards force the model to produce a complete, coherent action sequence where only the final graded output counts.
 
+---
+
+## Materials
+
+| Resource | Link |
+|---------|------|
+| 🤗 HuggingFace Space | [aarav0202/legaloom-env](https://huggingface.co/spaces/aarav0202/legaloom-env) |
+| 📓 Training Script | [`train_grpo.py`](./train_grpo.py) |
+| 📓 Colab Notebook | [`LegaLoom_GRPO_Training.ipynb`](./LegaLoom_GRPO_Training.ipynb) |
+| 📝 Blog Post | *(link after posting)* |
+| 🎬 Demo Video | *(link after recording)* |
+
+---
+
+## Quickstart
+
+```bash
+pip install openenv-core==0.2.3 fastapi uvicorn pydantic httpx openai pyyaml
+
+# Run server
+uvicorn server.app:app --host 0.0.0.0 --port 7860
+
+# Run baseline inference
+export API_BASE_URL=https://api.groq.com/openai/v1
+export MODEL_NAME=llama-3.1-8b-instant
+export HF_TOKEN=gsk_...
+python inference.py
 ```
-Case 1 — No TDS applicable (below threshold):
-  correct no_tds=true submission  → 1.0
-  non-zero amount submitted        → 0.0
 
-Case 2 — Inoperative PAN (Section 206AA):
-  rate=20% correctly applied       → +0.40
-  correct section identified       → +0.20
-  correct rate value               → +0.10
-  exact amount (±₹1)              → +0.30 (capped at 1.0 total)
-
-Case 3 — Normal TDS:
-  correct section                  → +0.20
-  correct rate                     → +0.10
-  goods excluded (mixed invoices)  → +0.10
-  exact amount (±₹1)              → +0.40 (or +0.30 for mixed invoices)
+```bash
+# Docker
+docker build -t legaloom-env .
+docker run -p 7860:7860 legaloom-env
 ```
 
 ---
 
 ## TDS Rules (FY 2025-26)
 
-| Section | Nature | Default Rate | Annual Threshold |
-|---|---|---|---|
-| 194C | Contractor — company | 2% | ₹30k single / ₹1,00,000 annual |
-| 194C | Contractor — individual/firm | 1% | ₹30k single / ₹1,00,000 annual |
-| 194J | Professional services | 10% | ₹50,000 |
-| 194J | Technical services (company vendor) | 2% | ₹50,000 |
-| 194I | Building / office rent | 10% | ₹6,00,000 |
-| 194I | Machinery / equipment hire | 2% | ₹6,00,000 |
-| 194H | Commission / brokerage | 2% | ₹20,000 |
-| 194T | Partner payments (NEW April 2025) | 10% | ₹20,000 |
-| 194Q | Buyer's goods purchase above ₹50L | 0.1% | ₹50,00,000 |
-| 206AA | Inoperative / missing PAN | 20% | Overrides all sections |
-
----
-
-## Baseline Scores
-
-Evaluated using `Qwen/Qwen2.5-72B-Instruct` via HuggingFace Inference Router:
-
-| Task | Score | Steps | Notes |
-|---|---|---|---|
-| task_easy | 1.000 | 5 | Correct section, rate, exact amount |
-| task_medium | 1.000 | 5 | Goods excluded, threshold checked correctly |
-| task_hard | 1.000 | 5 | Inoperative PAN detected, 20% correctly applied |
-| task_expert | 1.000 | 5 | 194T partner payment correctly identified |
-| **Average** | **1.000** | | Qwen/Qwen2.5-72B-Instruct via HF Inference |
-
-Secondary evaluation using `llama-3.3-70b-versatile` via Groq:
-
-| Task | Score | Notes |
-|---|---|---|
-| task_easy | 0.917 | Occasional GST base confusion on complex invoices |
-| task_medium | 1.000 | |
-| task_hard | 1.000 | |
-| task_expert | 1.000 | Both 194T and 194Q correctly handled |
-| **Average** | **0.979** | |
-
----
-
-## Setup & Usage
-
-### Install
-
-```bash
-pip install openenv-core openai
-```
-
-### Run locally
-
-```bash
-git clone https://github.com/aaravgupta0202/legaloom_env.git
-cd legaloom_env
-pip install openenv-core fastapi uvicorn pydantic openai
-uvicorn server.app:app --host 0.0.0.0 --port 7860
-```
-
-### Test endpoints
-
-```bash
-# Start a new episode
-curl -X POST http://localhost:7860/reset \
-     -H "Content-Type: application/json" -d "{}"
-
-# Take a step
-curl -X POST http://localhost:7860/step \
-     -H "Content-Type: application/json" \
-     -d '{"action": {"action_type": "read_invoice", "parameters": {}}}'
-
-# Health check
-curl http://localhost:7860/health
-```
-
-### Run with Docker
-
-```bash
-docker build -t legaloom-env .
-docker run -p 7860:7860 legaloom-env
-```
-
-### Run baseline inference
-
-```bash
-export HF_TOKEN=your_token_here
-export API_BASE_URL=https://router.huggingface.co/v1
-export MODEL_NAME=Qwen/Qwen2.5-72B-Instruct
-python inference.py
-```
+| Section | Nature | Rate | Threshold |
+|---------|--------|------|-----------|
+| 194J Professional | Legal, CA, audit, medical (individual/LLP) | 10% | ₹50,000/yr |
+| 194J Technical | IT, software, cloud, BPO (company vendor) | 2% | ₹50,000/yr |
+| 194C | Security, catering, manpower, events | 2% | ₹30K single / ₹1L annual |
+| 194I Building | Office rent, warehouse | 10% | ₹6,00,000/yr |
+| 194I Machinery | Equipment, vehicle hire | 2% | ₹6,00,000/yr |
+| 194H | Sales commission, brokerage | 2% | ₹20,000/yr |
+| **194T** | **Partner salary/drawings (NEW FY25-26)** | 10% | ₹20,000/yr |
+| 194Q | Goods >₹50L/yr (buyer turnover >₹10Cr) | 0.1% | ₹50,00,000/yr |
+| 206AA | Inoperative PAN override | 20% flat | — |
 
 ---
 
@@ -310,25 +178,24 @@ python inference.py
 
 ```
 legaloom_env/
-├── inference.py                     ← Baseline inference script (all 4 tasks)
-├── models.py                        ← TDSAction, TDSObservation, TDSState
-├── client.py                        ← LegaloomEnv WebSocket client
-├── openenv.yaml                     ← OpenEnv manifest with tasks + action/obs schemas
-├── Dockerfile                       ← Container definition (port 7860)
-└── server/
-    ├── app.py                       ← FastAPI server
-    ├── legaloom_env_environment.py  ← Environment logic (reset, step, state)
-    ├── graders.py                   ← Explicit deterministic grader functions
-    ├── tasks.py                     ← Task pool definitions and invoice sampling
-    ├── tds_rules.py                 ← FY 2025-26 TDS rules and section classifier
-    ├── pan_registry.py              ← Vendor PAN database (32 vendors, 4 inoperative)
-    └── invoice_db.json              ← 260 verified invoices with ground truth
+├── inference.py                   # Baseline agent
+├── train_grpo.py                  # GRPO training pipeline (full episode rollouts)
+├── LegaLoom_GRPO_Training.ipynb   # Colab notebook
+├── models.py                      # Pydantic typed models
+├── openenv.yaml                   # OpenEnv manifest
+├── Dockerfile                     # Container
+├── server/
+│   ├── legaloom_env_environment.py  # Core env (660 lines)
+│   ├── graders.py                   # Deterministic composite graders
+│   ├── tasks.py                     # 4 tasks, 260-invoice DB
+│   ├── tds_rules.py                 # TDS rule engine
+│   └── ...
+└── tests/ (32 tests)
+    ├── test_determinism.py
+    ├── test_edge_cases.py
+    ├── test_episode_rollout.py
+    ├── test_grader_consistency.py
+    ├── test_inference_logging.py
+    ├── test_reward_hacking.py
+    └── test_schema_contract.py
 ```
-
----
-
-## Live Endpoint
-
-**HF Space:** https://huggingface.co/spaces/aarav0202/legaloom-env
-
-**API base:** https://aarav0202-legaloom-env.hf.space

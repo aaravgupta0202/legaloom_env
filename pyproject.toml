@@ -15,9 +15,14 @@ description = "Legaloom Env environment for OpenEnv"
 requires-python = ">=3.10"
 dependencies = [
     # Core OpenEnv runtime (provides FastAPI server + HTTP client types)
-    # install from github
-    # "openenv-core[core] @ git+https://github.com/meta-pytorch/OpenEnv.git",
-    "openenv-core[core]>=0.2.2",
+    "openenv-core[core]>=0.2.3",
+    "openai>=2.30.0",
+    "fastapi>=0.115.0",
+    "uvicorn>=0.24.0",
+    "pydantic>=2.12.0",
+    "httpx>=0.28.0",
+    "PyYAML>=6.0.0",
+    "matplotlib>=3.8.0",
     # Environment-specific dependencies
     # Add all dependencies needed for your environment here
     # Examples:

@@ -9,7 +9,10 @@ from openenv.core import EnvClient
 from openenv.core.client_types import StepResult
 from openenv.core.env_server.types import State
 
-from .models import TDSAction, TDSObservation, TDSState
+try:
+    from .models import TDSAction, TDSObservation, TDSState
+except ImportError:
+    from models import TDSAction, TDSObservation, TDSState
 
 
 class LegaloomEnv(EnvClient[TDSAction, TDSObservation, TDSState]):
@@ -27,16 +30,26 @@ class LegaloomEnv(EnvClient[TDSAction, TDSObservation, TDSState]):
     """
 
     def _step_payload(self, action: TDSAction) -> Dict:
+        params = action.parameters
+        if hasattr(params, "model_dump"):
+            params = params.model_dump(exclude_none=True)
         return {
             "action_type": action.action_type,
-            "parameters":  action.parameters,
+            "parameters":  params,
         }
 
     def _parse_result(self, payload: Dict) -> StepResult[TDSObservation]:
-        obs_data = payload.get("observation", {})
+        missing = [k for k in ("reward", "done") if k not in payload]
+        if missing:
+            raise ValueError(f"Invalid step payload: missing required field(s): {', '.join(missing)}")
+        obs_data = payload.get("observation")
+        if not isinstance(obs_data, dict):
+            raise ValueError("Invalid step payload: 'observation' must be an object")
+        reward = float(payload["reward"])
+        done = bool(payload["done"])
         observation = TDSObservation(
-            done=payload.get("done", False),
-            reward=payload.get("reward", 0.001),
+            done=done,
+            reward=reward,
             invoice_text=obs_data.get("invoice_text", ""),
             action_result=obs_data.get("action_result", ""),
             available_actions=obs_data.get("available_actions", []),
@@ -46,8 +59,8 @@ class LegaloomEnv(EnvClient[TDSAction, TDSObservation, TDSState]):
         )
         return StepResult(
             observation=observation,
-            reward=payload.get("reward", 0.001),
-            done=payload.get("done", False),
+            reward=reward,
+            done=done,
         )
 
     def _parse_state(self, payload: Dict) -> TDSState:

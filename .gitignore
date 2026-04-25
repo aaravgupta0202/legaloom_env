@@ -1,6 +1,15 @@
+venv/
 __pycache__/
 *.pyc
 *.pyo
 .env
 *.egg-info/
-venv/
+dist/
+build/
+.DS_Store
+*.png
+
+CHUTIYACOMPETITION/
+*.txt
+curl
+uv.lock

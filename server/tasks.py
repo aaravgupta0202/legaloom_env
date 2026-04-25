@@ -2,12 +2,13 @@
 tasks.py — LegaLoom-Env Task Definitions (Upgraded)
 
 Four tasks of increasing difficulty, each drawing from the
-260-invoice database. Every reset() picks a random invoice
-from the appropriate difficulty pool.
+260-invoice database OR procedurally generated on-the-fly.
+Every reset() picks a random invoice from the appropriate difficulty pool
+or generates a fresh invoice using the procedural generator.
 
-Task 1 — Easy   : Single service, valid PAN, above threshold
+Task 1 — Easy : Single service, valid PAN, above threshold
 Task 2 — Medium : Mixed invoice (goods + service) or threshold boundary
-Task 3 — Hard   : Inoperative PAN or GST-bundled base
+Task 3 — Hard : Inoperative PAN or GST-bundled base
 Task 4 — Expert : Multiple simultaneous traps
 """
 
@@ -15,6 +16,13 @@ import json
 import os
 import random
 from typing import Optional
+
+try:
+    from .invoice_generator import generate_invoice
+except ImportError:
+    from invoice_generator import generate_invoice
+
+DEFAULT_TASK_SEED = 42
 
 # ---------------------------------------------------------------------------
 # Load invoice database
@@ -49,7 +57,7 @@ DIFFICULTY_POOLS = {
             "194I_rent",
             "194H_commission",
         ],
-        "hint_enabled": True,
+        "hint_enabled": False,   # No hints — agent must read invoice and reason independently
     },
     "task_medium": {
         "difficulty": "medium",
@@ -64,7 +72,7 @@ DIFFICULTY_POOLS = {
             "194J_technical",
             "194I_machinery",
         ],
-        "hint_enabled": True,
+        "hint_enabled": False,   # No hints — agent must plan the workflow independently
     },
     "task_hard": {
         "difficulty": "hard",
@@ -100,17 +108,57 @@ DIFFICULTY_POOLS = {
 TASK_ORDER = ["task_easy", "task_medium", "task_hard", "task_expert"]
 
 
+def _build_scenario_noise(task_id: str, chosen: dict, seed: Optional[int]) -> dict:
+    """
+    Deterministic scenario-noise generator for realism/novelty.
+    Adds non-authoritative memos that may be noisy/conflicting and
+    should be validated by proper rule reasoning.
+    """
+    combined_seed = f"{task_id}:{chosen.get('invoice_id')}:{seed}"
+    rng = random.Random(combined_seed)
+    noisy_memos = [
+        "Internal AP memo: Prior reviewer suggested 194J, pending final verification.",
+        "Vendor email note: Claims no deduction needed due to prior annual deductions.",
+        "Finance handoff note: Mentions legacy threshold interpretation from last FY.",
+        "Payment ops note: Tax treatment marked provisional until compliance check.",
+    ]
+    conflicting_memos = [
+        "Legacy note: Apply old benchmark; may conflict with current FY rule.",
+        "Ops comment: Section marker appears copied from a different contract type.",
+    ]
+    category = chosen.get("category", "")
+    gt_section = str(chosen.get("ground_truth", {}).get("section", "")).upper()
+    ambiguous = category in {
+        "mixed_invoice",
+        "threshold_boundary",
+        "gst_bundled_tds_base",
+        "inoperative_pan",
+    } or gt_section in {"SPLIT", "SPLIT_194J_194I"}
+    conflicting = task_id in {"task_hard", "task_expert"} and ambiguous and rng.random() < 0.6
+    memo = rng.choice(conflicting_memos if conflicting else noisy_memos)
+    return {
+        "ambiguous_signals": bool(ambiguous),
+        "conflicting_signal": bool(conflicting),
+        "requires_multi_step": bool(task_id in {"task_medium", "task_hard", "task_expert"}),
+        "memo": memo,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Task sampling
 # ---------------------------------------------------------------------------
 
-def sample_task(task_id: str, seed: Optional[int] = None) -> dict:
+def sample_task(task_id: str, seed: Optional[int] = None, use_procedural: Optional[bool] = None) -> dict:
     """
     Sample one random invoice from the appropriate difficulty pool.
+    
+    Can use either the static database OR procedurally generated invoices.
+    Procedural generation is used 30% of the time by default to prevent memorization.
 
     Args:
         task_id : "task_easy" | "task_medium" | "task_hard" | "task_expert"
-        seed    : optional random seed for reproducibility
+        seed : optional random seed for reproducibility
+        use_procedural : if True, use procedural generator; if None, 30% chance
 
     Returns:
         A complete task dict combining pool config + sampled invoice
@@ -119,21 +167,50 @@ def sample_task(task_id: str, seed: Optional[int] = None) -> dict:
         raise KeyError(f"Unknown task_id: {task_id!r}. Valid: {TASK_ORDER}")
 
     pool_config = DIFFICULTY_POOLS[task_id]
-    db = get_db()
+    rng = random.Random(seed if seed is not None else DEFAULT_TASK_SEED)
+    
+    # Decide whether to use procedural generation (30% by default for hard/expert)
+    if use_procedural is None:
+        if task_id in ("task_hard", "task_expert"):
+            use_procedural = rng.random() < 0.30
+        else:
+            use_procedural = rng.random() < 0.15
+    
+    # Use procedural generator
+    if use_procedural:
+        category = rng.choice(pool_config["categories"])
+        generated = generate_invoice(
+            category=category,
+            seed=rng.randint(1, 999999),
+            difficulty=pool_config["difficulty"],
+        )
+        chosen = {
+            "invoice_id": generated["invoice_id"],
+            "invoice_text": generated["invoice_text"],
+            "vendor_pan": generated["vendor_pan"],
+            "cumulative_ytd": generated["cumulative_ytd"],
+            "category": generated["category"],
+            "task_hint": generated["task_hint"],
+            "ground_truth": generated["ground_truth"],
+        }
+    else:
+        db = get_db()
+        # Filter invoices matching this pool's categories
+        candidates = [
+            inv for inv in db
+            if inv["category"] in pool_config["categories"]
+        ]
 
-    # Filter invoices matching this pool's categories
-    candidates = [
-        inv for inv in db
-        if inv["category"] in pool_config["categories"]
-    ]
+        if not candidates:
+            raise RuntimeError(f"No invoices found for task_id={task_id!r}")
 
-    if not candidates:
-        raise RuntimeError(f"No invoices found for task_id={task_id!r}")
-
-    if seed is not None:
-        random.seed(seed)
-
-    chosen = random.choice(candidates)
+        chosen = rng.choice(candidates)
+    scenario_noise = _build_scenario_noise(task_id, chosen, seed)
+    noisy_invoice_text = (
+        f"{chosen['invoice_text']}\n\n"
+        f"[Compliance Memo - Non-authoritative]\n{scenario_noise['memo']}\n"
+        "Treat this memo as advisory only; verify against invoice facts and statutory rules."
+    )
 
     return {
         "task_id":      task_id,
@@ -144,12 +221,14 @@ def sample_task(task_id: str, seed: Optional[int] = None) -> dict:
 
         # From the sampled invoice
         "invoice_id":      chosen["invoice_id"],
-        "invoice_text":    chosen["invoice_text"],
+        "invoice_text":    noisy_invoice_text,
         "vendor_pan":      chosen["vendor_pan"],
         "cumulative_ytd":  chosen["cumulative_ytd"],
         "category":        chosen["category"],
         "task_hint":       chosen["task_hint"],
         "ground_truth":    chosen["ground_truth"],
+        "scenario_noise":  scenario_noise,
+        "required_evidence_actions": _required_evidence_actions(chosen["category"], task_id),
 
         # Reward breakpoints vary by difficulty
         "reward_breakpoints": _build_breakpoints(pool_config["difficulty"], chosen),
@@ -187,7 +266,8 @@ def _build_breakpoints(difficulty: str, invoice: dict) -> dict:
 
     # Threshold check
     if is_threshold:
-        bp["threshold_checked"] = 0.15
+        bp["query_ytd_checked"] = 0.075
+        bp["threshold_checked"] = 0.075
 
     # GST base
     if is_bundled:
@@ -202,6 +282,32 @@ def _build_breakpoints(difficulty: str, invoice: dict) -> dict:
         bp = {k: round(v / total, 4) for k, v in bp.items()}
 
     return bp
+
+
+def _required_evidence_actions(category: str, task_id: str) -> list[str]:
+    """
+    Return the ordered evidence actions expected for a scenario.
+
+    Args:
+        category: Invoice category used for the sampled task.
+        task_id: Current task identifier (easy/medium/hard/expert).
+
+    Returns:
+        Ordered de-duplicated action_type list used by submit-time reasoning checks.
+    """
+    base = ["check_pan"]
+    if category in {"mixed_invoice", "gst_bundled_tds_base"}:
+        base.append("lookup_section")
+    if category in {"threshold_boundary", "below_threshold_new_limits", "below_threshold"}:
+        base.extend(["query_ytd", "check_threshold"])
+    if task_id in {"task_hard", "task_expert"}:
+        base.append("query_law")
+    # preserve order while deduplicating
+    out = []
+    for item in base:
+        if item not in out:
+            out.append(item)
+    return out
 
 
 # ---------------------------------------------------------------------------

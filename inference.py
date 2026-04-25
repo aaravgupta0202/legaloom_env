@@ -1,15 +1,15 @@
 """
 inference.py — LegaLoom-Env Baseline Inference Script
 
-Usage (Windows):
-    set API_BASE_URL=https://api.groq.com/openai/v1
-    set MODEL_NAME=llama-3.3-70b-versatile
-    set HF_TOKEN=gsk_xxxx
+Usage (PowerShell):
+    $env:API_BASE_URL = "https://api.groq.com/openai/v1"
+    $env:MODEL_NAME   = "llama-3.1-8b-instant"
+    $env:HF_TOKEN     = "gsk_xxxx"
     python inference.py
 
-Usage (Linux/Mac):
+Usage (bash):
     export API_BASE_URL=https://api.groq.com/openai/v1
-    export MODEL_NAME=llama-3.3-70b-versatile
+    export MODEL_NAME=llama-3.1-8b-instant
     export HF_TOKEN=gsk_xxxx
     python inference.py
 
@@ -18,14 +18,15 @@ Stdout format (strictly enforced by hackathon spec):
     [STEP]  step=<n> action=<str> reward=<0.00> done=<true|false> error=<msg|null>
     [END]   success=<true|false> steps=<n> score=<0.00> rewards=<r1,r2,...,rn>
 
-Score contract: every value in the rewards= list and the score= field must be
-strictly between 0 and 1 (not 0.0 and not 1.0).
+Score contract: every value in rewards= and score= must be strictly
+between 0 and 1 — not 0.0 and not 1.0.
 """
 
 import json
 import os
 import sys
 import textwrap
+import time
 from typing import List, Optional
 
 from openai import OpenAI
@@ -34,18 +35,18 @@ from openai import OpenAI
 API_BASE_URL     = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME       = os.getenv("MODEL_NAME",   "Qwen/Qwen2.5-72B-Instruct")
 HF_TOKEN         = os.getenv("HF_TOKEN")
-API_KEY          = HF_TOKEN or os.getenv("API_KEY")
+API_KEY          = HF_TOKEN or os.getenv("API_KEY") or "dummy"
 LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
 
-BENCHMARK        = "legaloom_env"
-MAX_STEPS        = 10
-TEMPERATURE      = 0        # deterministic — reproducible baseline scores
-MAX_TOKENS       = 300
+BENCHMARK         = "legaloom_env"
+MAX_STEPS         = 10
+TEMPERATURE       = 0       # deterministic — reproducible baseline scores
+MAX_TOKENS        = 512
 SUCCESS_THRESHOLD = 0.5
 
-# Score safety constants — values formatted with .2f must stay in (0.00, 1.00)
-_SCORE_MIN = 0.05
-_SCORE_MAX = 0.95
+# Score safety: formatted at .2f these stay strictly in (0.00, 1.00)
+_SCORE_MIN = 0.01
+_SCORE_MAX = 0.99
 
 
 def _safe(v: float) -> float:
@@ -55,8 +56,8 @@ def _safe(v: float) -> float:
 
 # ── Mandatory stdout loggers ──────────────────────────────────────────────────
 
-def log_start(task: str, env: str, model: str) -> None:
-    print(f"[START] task={task} env={env} model={model}", flush=True)
+def log_start(task: str, env: str, model: str, seed: int = 42) -> None:
+    print(f"[START] task={task} env={env} model={model} seed={seed}", flush=True)
 
 
 def log_step(step: int, action: str, reward: float,
@@ -72,13 +73,14 @@ def log_step(step: int, action: str, reward: float,
 
 
 def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
-    # rewards must never be empty — insert score as sentinel if no steps completed
+    # Never emit an empty rewards= field — evaluator would parse it as 0.0
     safe_list   = [_safe(r) for r in rewards] if rewards else [_safe(score)]
     rewards_str = ",".join(f"{r:.2f}" for r in safe_list)
-    safe_score  = _safe(score)
+    # Format: [END] success=... steps=... rewards=... score=...
+    # rewards= comes before score= so the hackathon validator regex matches cleanly
     print(
         f"[END] success={str(success).lower()} steps={steps} "
-        f"score={safe_score:.2f} rewards={rewards_str}",
+        f"rewards={rewards_str} score={_safe(score):.2f}",
         flush=True,
     )
 
@@ -92,53 +94,79 @@ Read a vendor invoice and compute the exact TDS deduction in INR.
 OUTPUT FORMAT: Each turn output ONLY a valid JSON object. No markdown, no explanation.
 
 ACTIONS:
-1. Read invoice (always first step):
-   {"action_type": "read_invoice", "parameters": {}}
+1. {"action_type": "read_invoice", "parameters": {}}
+2. {"action_type": "check_pan", "parameters": {"pan": "<10-char PAN>"}}
+3. {"action_type": "query_ytd", "parameters": {"pan": "<PAN>"}}
+4. {"action_type": "lookup_section", "parameters": {"description": "<service>"}}
+5. {"action_type": "check_threshold", "parameters": {"section": "194I", "amount": 65000}}
+6. {"action_type": "query_law", "parameters": {"section": "194J"}}
+7. {"action_type": "submit_answer", "parameters": {"tds_amount_inr": 6500.0, "section": "194I", "rate_percent": 10.0}}
+   No TDS: {"action_type": "submit_answer", "parameters": {"tds_amount_inr": 0.0, "no_tds": "true", "section": "194I", "rate_percent": 0.0}}
 
-2. Check vendor PAN status (always do this before computing):
-   {"action_type": "check_pan", "parameters": {"pan": "<10-char PAN>"}}
+═══════════════════════════════════════════════════════
+TDS SECTIONS FY 2025-26
+═══════════════════════════════════════════════════════
+194J Professional 10% → legal, CA, audit, medical, architect, CS
+                        ONLY if vendor is individual / LLP / proprietor
+194J Technical    2%  → IT support, software, cloud, BPO, data processing
+                        If vendor is Pvt Ltd / company → ALWAYS 2% technical
+194C Contractor   2%  → security, catering, housekeeping, manpower,
+                        events, printing, transport contracts, cleaning
+194I Rent        10%  → office space, warehouse, land, building rent
+194I Rent         2%  → machinery, equipment, vehicle hire (without driver)
+194H Commission   2%  → sales commission, brokerage, referral fees
+194T Partner     10%  → NEW: partner salary / drawings / commission from firm
+194Q Goods       0.1% → goods purchase >50L/year (buyer turnover >10Cr)
 
-3. Query cumulative YTD payments to vendor:
-   {"action_type": "query_ytd", "parameters": {"pan": "<PAN>"}}
+═══════════════════════════════════════════════════════
+CRITICAL RULES
+═══════════════════════════════════════════════════════
+RULE 1 — INOPERATIVE PAN (decisive for hard tasks):
+  check_pan returns "INOPERATIVE" → rate = 20% flat (Section 206AA)
+  TDS = taxable_amount × 20%  — overrides every section rate
+  Submit: {"tds_amount_inr": <base×0.20>, "section": "<section>", "rate_percent": 20.0}
 
-4. Look up TDS section for a service:
-   {"action_type": "lookup_section", "parameters": {"description": "<service description>"}}
+RULE 2 — GST:
+  GST on separate line → TDS on pre-GST amount only
+  GST bundled / "inclusive of all taxes" → TDS on full invoice total
 
-5. Check if TDS threshold is crossed:
-   {"action_type": "check_threshold", "parameters": {"section": "194J", "amount": 85000}}
+RULE 3 — Mixed invoices:
+  Goods / hardware / materials → NO TDS on that portion
+  Apply TDS only to service / rent / commission lines
 
-6. Look up law text for a section:
-   {"action_type": "query_law", "parameters": {"section": "194J"}}
+RULE 4 — Thresholds (no TDS if below):
+  194J: 50,000/year  |  194C: 30,000 single / 1,00,000 annual
+  194I: 6,00,000/year  |  194H: 20,000/year
+  Below threshold → tds_amount_inr=0.0, no_tds="true"
 
-7. Submit your final answer (ends episode):
-   {"action_type": "submit_answer", "parameters": {
-     "tds_amount_inr": <AMOUNT>, "section": "<194J>", "rate_percent": <RATE>
-   }}
-   For NO TDS (below threshold):
-   {"action_type": "submit_answer", "parameters": {
-     "tds_amount_inr": 0.0, "no_tds": "true", "section": "<section>", "rate_percent": 0.0
-   }}
+RULE 5 — Company vs Individual:
+  Pvt Ltd / Ltd → 194J Technical 2%
+  Individual / proprietor / LLP → 194J Professional 10%
 
-TDS RULES FY 2025-26:
-  194J Professional (10%): legal, CA/audit, medical, architect, CS — individual/LLP vendor
-  194J Technical    (2%):  IT, cloud, software dev, BPO — company (Pvt Ltd) vendor = always technical
-  194C Contractor   (2%):  security, catering, housekeeping, manpower, events, printing
-  194I Rent        (10%):  office/warehouse/land/building rent
-  194I Rent         (2%):  machinery/equipment/vehicle hire (no driver)
-  194H Commission   (2%):  sales commission, brokerage, referral fees
-  194T Partner     (10%):  NEW — partner salary/drawings from firm
-  194Q Goods       (0.1%): goods purchase >50L/year (buyer turnover >10Cr)
+═══════════════════════════════════════════════════════
+STRATEGY
+═══════════════════════════════════════════════════════
+Step 1: read_invoice
+Step 2: check_pan  ← ALWAYS. If INOPERATIVE → submit with rate=20% immediately.
+Step 3: lookup_section (use service description from invoice)
+Step 4: check_threshold (if amount is anywhere near section limit)
+Step 5: submit_answer
 
-CRITICAL RULES:
-  1. ALWAYS check PAN first — inoperative PAN = 20% flat (Sec 206AA), overrides all rates
-  2. Thresholds: 194J=50,000 | 194C=30,000 single/1,00,000 annual | 194I=6,00,000/yr | 194H=20,000
-  3. GST shown separately → TDS on pre-GST amount
-     GST bundled in total  → TDS on FULL invoice amount
-  4. Goods line items (hardware, products, materials) → NO TDS
-     TDS only on service/rent/commission portion
-  5. Below threshold → submit with tds_amount_inr=0.0 and no_tds="true"
+WORKED EXAMPLES:
+  Inoperative PAN, office rent INR 70,000:
+    TDS = 70,000 × 20% = 14,000
+    → {"tds_amount_inr": 14000.0, "section": "194I", "rate_percent": 20.0}
 
-STRATEGY: read_invoice → check_pan → lookup_section → [query_ytd if near threshold] → submit_answer
+  Operative PAN, CA audit fee INR 85,000, individual vendor:
+    TDS = 85,000 × 10% = 8,500
+    → {"tds_amount_inr": 8500.0, "section": "194J", "rate_percent": 10.0}
+
+  IT support INR 1,20,000, Pvt Ltd vendor:
+    TDS = 1,20,000 × 2% = 2,400
+    → {"tds_amount_inr": 2400.0, "section": "194J", "rate_percent": 2.0}
+
+  Security services INR 25,000 (below 30,000 threshold):
+    → {"tds_amount_inr": 0.0, "no_tds": "true", "section": "194C", "rate_percent": 0.0}
 
 Output ONLY the JSON. Nothing else.
 """).strip()
@@ -147,7 +175,7 @@ Output ONLY the JSON. Nothing else.
 # ── LLM interaction ───────────────────────────────────────────────────────────
 
 def build_user_prompt(step: int, obs: dict, history: List[str]) -> str:
-    history_block   = "\n".join(history[-8:]) if history else "None"
+    history_block   = "\n".join(history[-6:]) if history else "None"
     invoice_block   = obs.get("invoice_text", "")
     invoice_section = f"\nINVOICE:\n{invoice_block}\n" if invoice_block else ""
     hint            = obs.get("hint", "")
@@ -155,47 +183,59 @@ def build_user_prompt(step: int, obs: dict, history: List[str]) -> str:
     return textwrap.dedent(f"""
 Step {step} of {obs.get('max_steps', 10)}.{invoice_section}
 Last result: {obs.get('action_result', '')}
-Available actions: {obs.get('available_actions', [])}
+Available: {obs.get('available_actions', [])}
 {hint_line}
 
 Previous steps:
 {history_block}
 
-Output your next action as a JSON object only.
+REMINDER: If PAN is INOPERATIVE → rate=20.0, tds_amount=base×0.20. Submit immediately.
+
+Output your next action as JSON only.
 """).strip()
 
 
 def get_agent_action(client: OpenAI, step: int, obs: dict,
-                     history: List[str]) -> dict:
-    try:
-        completion = client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user",   "content": build_user_prompt(step, obs, history)},
-            ],
-            temperature=TEMPERATURE,
-            max_tokens=MAX_TOKENS,
-            stream=False,
-        )
-        raw = (completion.choices[0].message.content or "").strip()
-        # Strip markdown fences if model wraps JSON
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-            raw = raw.strip()
-        return json.loads(raw)
-    except json.JSONDecodeError as e:
-        print(f"[DEBUG] JSON parse error at step {step}: {e}", flush=True)
-        return {"action_type": "submit_answer",
-                "parameters": {"tds_amount_inr": 0.0, "section": "194J",
-                                "rate_percent": 0.0, "no_tds": "true"}}
-    except Exception as e:
-        print(f"[DEBUG] LLM call failed at step {step}: {e}", flush=True)
-        return {"action_type": "submit_answer",
-                "parameters": {"tds_amount_inr": 0.0, "section": "194J",
-                                "rate_percent": 0.0, "no_tds": "true"}}
+                     history: List[str], retries: int = 3) -> dict:
+    """Call LLM with automatic retry on rate limits."""
+    for attempt in range(retries):
+        try:
+            completion = client.chat.completions.create(
+                model=MODEL_NAME,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user",   "content": build_user_prompt(step, obs, history)},
+                ],
+                temperature=TEMPERATURE,
+                max_tokens=MAX_TOKENS,
+                stream=False,
+            )
+            raw = (completion.choices[0].message.content or "").strip()
+            if raw.startswith("```"):
+                raw = raw.split("```")[1]
+                if raw.startswith("json"):
+                    raw = raw[4:]
+                raw = raw.strip()
+            return json.loads(raw)
+
+        except json.JSONDecodeError as e:
+            print(f"[DEBUG] JSON parse error step {step}: {e}", flush=True)
+            break
+
+        except Exception as e:
+            err = str(e)
+            print(f"[DEBUG] LLM error step {step} attempt {attempt+1}: {err[:120]}", flush=True)
+            if "rate_limit" in err.lower() or "429" in err:
+                wait = 30 * (attempt + 1)
+                print(f"[DEBUG] Rate limited — waiting {wait}s...", flush=True)
+                time.sleep(wait)
+                continue
+            break
+
+    # Graceful fallback — ends episode cleanly rather than crashing
+    return {"action_type": "submit_answer",
+            "parameters": {"tds_amount_inr": 0.0, "section": "194J",
+                            "rate_percent": 0.0, "no_tds": "true"}}
 
 
 # ── Episode runner ────────────────────────────────────────────────────────────
@@ -206,15 +246,14 @@ def run_episode(client: OpenAI, env, task_id: str) -> dict:
     rewards: List[float] = []
     history: List[str]   = []
     steps_taken = 0
-    score       = _SCORE_MIN   # safe default — never 0.0
+    score       = _SCORE_MIN
     success     = False
 
-    log_start(task=task_id, env=BENCHMARK, model=MODEL_NAME)
+    log_start(task=task_id, env=BENCHMARK, model=MODEL_NAME, seed=42)
 
     try:
         result = env.reset(task_id=task_id)
 
-        # Support both local env (returns obs directly) and HTTP client (StepResult wrapper)
         if hasattr(result, "observation"):
             obs  = result.observation.__dict__ if hasattr(result.observation, "__dict__") else {}
             done = result.done
@@ -258,20 +297,18 @@ def run_episode(client: OpenAI, env, task_id: str) -> dict:
             log_step(step=step, action=action_str, reward=reward, done=done, error=error)
             history.append(
                 f"Step {step}: {action_str} → reward={reward:.2f} | "
-                f"{obs.get('action_result', '')[:120]}"
+                f"{obs.get('action_result', '')[:150]}"
             )
 
             if done:
                 break
 
-        # Score = last reward (the terminal grader score from submit_answer)
         score   = rewards[-1] if rewards else _SCORE_MIN
         score   = _safe(score)
         success = score >= SUCCESS_THRESHOLD
 
     except Exception as e:
         print(f"[DEBUG] Episode error for {task_id}: {e}", flush=True)
-        # score stays at _SCORE_MIN — valid, never 0.0
 
     finally:
         log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
@@ -308,7 +345,6 @@ def main() -> None:
 
             results.append(run_episode(client, LocalEnvWrapper(env), task_id))
 
-    # Summary to stderr — keeps stdout clean for the evaluator parser
     print("\n[SUMMARY]", file=sys.stderr)
     for r in results:
         print(
