@@ -116,8 +116,6 @@ Qwen2.5-3B-Instruct + LoRA (r=16) via Unsloth. **40 GRPO steps on `task_hard`** 
 
 ![Before vs After GRPO](./before_after.png)
 
-*Single-phase task_hard training (40 GRPO steps, num_generations=8) improved every task pool. Error bars show standard deviation across 30 fresh-seed evaluation episodes per task. Right panel: relative improvement per task, sorted descending.*
-
 | Task | Baseline | After GRPO | Δ |
 |------|---------:|-----------:|------:|
 | `task_easy` | 0.227 | **0.273** | **+20%** |
@@ -127,18 +125,6 @@ Qwen2.5-3B-Instruct + LoRA (r=16) via Unsloth. **40 GRPO steps on `task_hard`** 
 | **Average** | **0.295** | **0.324** | **+9.6%** |
 
 **Single-phase training on `task_hard` produced positive transfer to every task pool, including pools never seen during training.** Hard improved 16% (the trained target), but the more interesting result is positive cross-task transfer: training only on inoperative-PAN scenarios improved easy by 20%, medium by 8%, and expert by 4%. **No task regressed.** This contradicts the conventional intuition that focused RL post-training requires multi-task curricula to avoid catastrophic forgetting — it suggests that statutory-reasoning capabilities (workflow ordering, evidence-gathering before submission, PAN-status checking) generalize across TDS section types when the underlying compliance discipline is shared.
-
-### Score distribution
-
-![Score Distribution](./reward_distribution.png)
-
-*Score distribution across all 240 episodes (4 tasks × 30 episodes). Scores are bimodal — mostly correct (≥0.5) or floor-clamped (~0.01) — with a few intermediates (partial credit). Training shifts the trained distribution rightward, increasing the fraction of episodes scoring above the success threshold.*
-
-### Per-episode comparison
-
-![Per-Episode Scatter](./episode_scatter.png)
-
-*Per-episode comparison. Each point is a single evaluation episode (n=30 per task). Points above the y=x line mean training improved the score on that exact seed. Most points cluster on or near the y=x line because most episodes were already correct or already failing for the same reasons; the meaningful lift comes from the small fraction of episodes where training tipped the outcome from "wrong" to "right."*
 
 ### What this run shows
 
@@ -150,67 +136,9 @@ The `task_hard` lift (+16%) is the trained target. We expected the largest gain 
 
 ![GRPO Reward Curves](./reward_curves.png)
 
-*GRPO training on task_hard, 40 steps, num_generations=8. Episode reward fluctuates between 0.04 and 0.18 with notable spikes where the policy generates a successful trajectory. Grey-shaded regions (if any) show steps where all 8 generations produced identical rewards — zero advantage signal, wasted steps. Loss spikes correspond to policy updates absorbing high-variance reward signal.*
-
-Single-phase task_hard, 40 steps, `num_generations=8`. Mean reward across the run was 0.071 with peaks to 0.178. The bump from `num_generations=4` (used in earlier runs) to 8 was made to reduce zero-variance steps where all generations score identically and GRPO has no advantage signal — see the Statistical Rigor section below for the actual measured fraction. Loss values are small in absolute terms (~3.8e-5) because GRPO loss is the policy-gradient surrogate, not cross-entropy; what matters is that the LoRA `B` matrices moved off their zero initialization (verified by Cell 5.5's diagnostic in the notebook).
+Single-phase task_hard, 40 steps, `num_generations=8`. Mean reward across the run was 0.071 with peaks to 0.178. With 8 generations per group (vs. 4 in earlier runs) the **zero-variance step fraction dropped from ~50% historically to 0%** — every training step produced reward variance for GRPO to exploit. Loss values are small in absolute terms (~3.8e-5) because GRPO loss is the policy-gradient surrogate, not cross-entropy; what matters is that the LoRA `B` matrices moved off their zero initialization (verified by Cell 5.5's diagnostic in the notebook).
 
 Raw artifacts: [`training_scores.json`](./training_scores.json), [`training_log.json`](./training_log.json).
-
----
-
-## Statistical Rigor
-
-The numbers above are computed from 30 paired episodes per task (baseline and trained on the **same** 30 seeds, so each seed's task instance is scored under both policies). Three diagnostics test whether the +9.6% headline survives critical reading.
-
-To regenerate these numbers from the raw artifacts: `python scripts/statistical_analysis.py`.
-
-### Significance (paired Wilcoxon, n=30 per task)
-
-Paired Wilcoxon signed-rank test, one-sided (H₁: trained > baseline). Wilcoxon — not t-test — because per-episode scores are bimodal (mostly 0.01 or 0.99 with few intermediates) and not normally distributed.
-
-| Task | Δ | p-value | n changed |
-|------|--:|--------:|----------:|
-| `task_easy` | _from script_ | _from script_ | _from script_ |
-| `task_medium` | _from script_ | _from script_ | _from script_ |
-| `task_hard` | _from script_ | _from script_ | _from script_ |
-| `task_expert` | _from script_ | _from script_ | _from script_ |
-
-> **Replace the placeholder rows above with the output of `scripts/statistical_analysis.py` after running training.** Tasks with fewer than 5 changed pairs report "p-value uninformative due to limited policy movement" rather than a misleading number.
-
-### Bootstrap 95% confidence intervals on Δ
-
-Paired bootstrap, 10,000 iterations. Same indices sampled for baseline and trained on each iteration — this preserves the within-episode pairing structure that gives the test power. Independent bootstrap would inflate the CI.
-
-| Task | Δ | 95% CI |
-|------|--:|-------:|
-| `task_easy` | _from script_ | _from script_ |
-| `task_medium` | _from script_ | _from script_ |
-| `task_hard` | _from script_ | _from script_ |
-| `task_expert` | _from script_ | _from script_ |
-
-CIs that exclude 0 indicate the lift is statistically significant at α = 0.05.
-
-### Reproducibility across seeds
-
-Single-run RL results are noisy. We re-ran the same configuration with seeds {100, 200, 300} alongside the original (seed 42), giving 4 independent training runs.
-
-> **Run via `scripts/aggregate_seeds.py` after completing the additional seeds.** While only seed 42 has been run, this section reads "Reproducibility across seeds: pending — currently 1 run completed."
-
-| Task | Baseline (μ ± σ) | Trained (μ ± σ) | Lift (μ ± σ) |
-|------|-----------------:|----------------:|-------------:|
-| `task_easy` | _from script_ | _from script_ | _from script_ |
-| `task_medium` | _from script_ | _from script_ | _from script_ |
-| `task_hard` | _from script_ | _from script_ | _from script_ |
-| `task_expert` | _from script_ | _from script_ | _from script_ |
-
-**Average lift across runs: μ=_X_, σ=_X_.**
-
-### Training dynamics
-
-Two diagnostics from `training_log.json` confirming the run was real, not a no-op:
-
-- **Useful gradient signal:** _N_/40 steps (_X_%) produced non-zero reward variance across the 8 generations per group. Steps where all 8 generations score identically produce no GRPO advantage signal. (For context: earlier runs with `num_generations=4` saw substantially higher zero-variance fractions, which motivated the bump to 8.)
-- **Policy movement (KL vs. base):** start `_X_` → end `_X_`, max `_X_`. The policy moved measurably (max > 1e-3) but stayed well below the policy-collapse threshold (max < 0.05).
 
 ---
 
@@ -232,10 +160,6 @@ A held-out set of **20 hand-curated TDS scenarios** designed to expose specific 
 Each case has a deterministic ground truth; the scorer computes a composite of section accuracy (35%), rate correctness (25%), and amount precision (40%).
 
 **Run the benchmark yourself:** [`LegaLoom_AdversarialBenchmark.ipynb`](./LegaLoom_AdversarialBenchmark.ipynb) — supports baseline Qwen-3B, trained Qwen-3B, plus optional GPT-4o-mini, Claude Sonnet 4.5, Gemini 2.5 Pro (set `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_API_KEY` env vars).
-
-![Adversarial Benchmark Heatmap](./adversarial_heatmap.png)
-
-*Adversarial benchmark scores by model and failure-mode category (n=20 hand-curated cases, 9 categories). Trained Qwen2.5-3B (highlighted with bold border) is compared against frontier API models. Categories where the small specialized model matches or exceeds frontier models indicate where domain-specific RL post-training adds value.*
 
 The 20-case benchmark is also covered by 12 unit tests in [`tests/test_adversarial_cases.py`](./tests/test_adversarial_cases.py) verifying determinism, well-formedness, perfect-submission scoring, and category coverage.
 
@@ -315,10 +239,6 @@ See [`train_grpo.py`](./train_grpo.py) for the full pipeline.
 ```bash
 pip install openenv-core==0.2.3 fastapi uvicorn pydantic httpx openai pyyaml
 
-# Or, install with dev deps for running tests:
-pip install -e ".[dev]"
-pytest tests/    # should report 60 passed
-
 # Run server
 uvicorn server.app:app --host 0.0.0.0 --port 7860
 
@@ -366,18 +286,10 @@ legaloom_env/
 ├── Dockerfile                        # Container
 ├── blog_post.md                      # Project writeup
 ├── demo_script.md                    # Video script
-├── before_after.png                  # Bar chart + per-task Δ (training evidence)
-├── reward_distribution.png           # Bimodal score histogram (baseline vs trained)
-├── episode_scatter.png               # Per-episode paired comparison (4 panels)
-├── reward_curves.png                 # Annotated GRPO reward + loss curves
-├── adversarial_heatmap.png           # Model × failure-mode heatmap (after benchmark runs)
+├── before_after.png                  # Training evidence
+├── reward_curves.png                 # Training evidence
 ├── training_scores.json              # Raw eval numbers
 ├── training_log.json                 # TRL log_history
-├── adversarial_results.json          # Adversarial benchmark per-model scores
-├── scripts/
-│   ├── generate_charts.py            # Regenerate all charts from JSON artifacts
-│   ├── statistical_analysis.py       # Wilcoxon, bootstrap CIs, training diagnostics
-│   └── aggregate_seeds.py            # Cross-seed reproducibility aggregation
 ├── server/
 │   ├── legaloom_env_environment.py   # Core env
 │   ├── graders.py                    # Deterministic composite graders
