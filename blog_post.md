@@ -93,6 +93,12 @@ Two diagnostics from the per-step training log confirm the run was real:
 
 This section converts the project from "we measured a number" to "we measured a number, tested it three ways, and report it honestly — including the cases where statistical significance was marginal."
 
+## Does the Model Choice Matter?
+
+<!-- AUTO-MULTIMODEL-START -->
+*Populated by `scripts/populate_results.py` after running `scripts/aggregate_models.py` with multiple `training_scores_*.json` artifacts. The codebase is parameterized to support training and comparing Qwen2.5-3B, Gemma-2-2B, and Llama-3.2-3B on the same env using one notebook driven by `LEGALOOM_MODEL_NAME` / `LEGALOOM_MODEL_TAG` environment variables.*
+<!-- AUTO-MULTIMODEL-END -->
+
 ## What We'd Do With More Time
 
 - **Multi-turn rollouts** — currently the model emits the full action sequence in one shot without environment feedback between actions. A proper multi-turn loop would let it condition each action on the previous tool output.

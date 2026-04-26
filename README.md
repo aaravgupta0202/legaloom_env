@@ -193,6 +193,14 @@ Wilcoxon — not t-test — because per-episode scores are bimodal (mostly 0.01 
 
 ---
 
+## Cross-Model Comparison
+
+<!-- AUTO-MULTIMODEL-START -->
+*Populated by `scripts/populate_results.py` after running `scripts/aggregate_models.py`. Populate by training with `LEGALOOM_MODEL_TAG=qwen3b`, `gemma2b`, and `llama3b` (see *Reproducibility* section below).*
+<!-- AUTO-MULTIMODEL-END -->
+
+---
+
 ## Adversarial Benchmark
 
 A held-out set of **20 hand-curated TDS scenarios** designed to expose specific LLM failure modes. These cases never appear in training data — they're a frontier benchmark for any model claiming to handle Indian compliance.
@@ -352,7 +360,34 @@ Optional:
 - **Adversarial benchmark.** Open `LegaLoom_AdversarialBenchmark.ipynb`, set `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_API_KEY` env vars, run all cells (~$15 in API credits, ~3 hours). After it finishes, re-run `populate_results.py` and the heatmap caption updates with a one-sentence headline if the trained Qwen-3B beat any frontier model on any category.
 - **Multi-seed reproducibility.** Run training 3 more times with `SEED=100`, `200`, `300`, save results under `runs/seed_*/training_scores.json`, then `python scripts/aggregate_seeds.py`. The Statistical Rigor section's reproducibility row updates from "single run" to "across N runs, μ ± σ" automatically.
 
-The marker-bounded sections in this README (`AUTO-RESULTS-TABLE-START`, `AUTO-HEADLINE-START`, `AUTO-STATRIGOR-START`, `AUTO-ADVCAPTION-START`) are auto-replaced by `populate_results.py`. To revert: `python scripts/restore_backups.py`. Pre-submission readiness: `python scripts/verify_pre_submit.py`.
+### Multi-model comparison (optional)
+
+To compare multiple base models on the same task:
+
+1. Run training with each model by setting environment variables before launching the notebook:
+
+   ```bash
+   LEGALOOM_MODEL_NAME='Qwen/Qwen2.5-3B-Instruct'   LEGALOOM_MODEL_TAG='qwen3b'  jupyter notebook
+   LEGALOOM_MODEL_NAME='google/gemma-2-2b-it'        LEGALOOM_MODEL_TAG='gemma2b' jupyter notebook
+   LEGALOOM_MODEL_NAME='meta-llama/Llama-3.2-3B-Instruct' LEGALOOM_MODEL_TAG='llama3b' jupyter notebook
+   ```
+
+2. After all 3 runs finish, the repo root will have `training_scores_qwen3b.json`, `training_scores_gemma2b.json`, `training_scores_llama3b.json` (plus the per-model `before_after_*.png` and `reward_curves_*.png`).
+
+3. Aggregate: `python scripts/aggregate_models.py` (writes `aggregated_models.json`)
+
+4. Generate the leaderboard chart: `python scripts/generate_charts.py` (now also produces `model_leaderboard.png`)
+
+5. Re-populate README/blog: `python scripts/populate_results.py` — the Cross-Model Comparison section now contains the summary table, the winner narrative, and a reference to the leaderboard chart.
+
+**Access requirements:**
+- `Qwen/Qwen2.5-3B-Instruct` — public, no special access needed
+- `google/gemma-2-2b-it` — requires accepting Gemma terms on the model's HF page
+- `meta-llama/Llama-3.2-3B-Instruct` — requires Meta's gated-access approval (typically <1 hour after request)
+
+Set `HF_TOKEN` environment variable with a token that has read access to gated models.
+
+The marker-bounded sections in this README (`AUTO-RESULTS-TABLE-START`, `AUTO-HEADLINE-START`, `AUTO-STATRIGOR-START`, `AUTO-MULTIMODEL-START`, `AUTO-ADVCAPTION-START`) are auto-replaced by `populate_results.py`. To revert: `python scripts/restore_backups.py`. Pre-submission readiness: `python scripts/verify_pre_submit.py`.
 
 ---
 
@@ -381,9 +416,10 @@ legaloom_env/
 │   ├── generate_charts.py            # Regenerate all charts from JSON artifacts
 │   ├── statistical_analysis.py       # Wilcoxon, bootstrap CIs, training diagnostics
 │   ├── aggregate_seeds.py            # Cross-seed reproducibility aggregation
+│   ├── aggregate_models.py           # Cross-model leaderboard aggregation
 │   ├── populate_results.py           # Fill marker-bounded README/blog sections
 │   ├── restore_backups.py            # Undo populate_results (restore from .bak)
-│   └── verify_pre_submit.py          # Pre-submission 8-item checklist runner
+│   └── verify_pre_submit.py          # Pre-submission 9-item checklist runner
 ├── server/
 │   ├── legaloom_env_environment.py   # Core env
 │   ├── graders.py                    # Deterministic composite graders

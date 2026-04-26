@@ -7,13 +7,15 @@ Reads three JSON artifacts produced by the notebooks:
   - training_log.json       (from LegaLoom_FullCurriculum.ipynb Cell 6)
   - adversarial_results.json (from LegaLoom_AdversarialBenchmark.ipynb Cell 9)
 
-Outputs five PNGs in the repo root (overwrites if present):
+Outputs PNGs in the repo root (overwrites if present):
   1. before_after.png         — bar chart: baseline vs trained, plus per-task Δ
   2. reward_curves.png        — annotated GRPO training curves
   3. reward_distribution.png  — bimodal score histograms (baseline vs trained)
   4. episode_scatter.png      — per-episode paired comparison, 4 task panels
   5. adversarial_heatmap.png  — model × failure-mode category scores (only if
                                  adversarial_results.json exists)
+  6. model_leaderboard.png    — cross-model comparison (only if
+                                 aggregated_models.json exists with 2+ models)
 
 Usage from repo root, after a training run:
     python scripts/generate_charts.py
@@ -436,6 +438,120 @@ def make_adversarial_heatmap(
 # CLI
 # ===========================================================================
 
+def make_model_leaderboard(
+    aggregated_path: str | Path = "aggregated_models.json",
+    output_path: str | Path = "model_leaderboard.png",
+) -> Optional[str]:
+    """Cross-model comparison chart: 1×2 layout, 6-bar grouped + per-task Δ.
+
+    Reads aggregated_models.json (output of scripts/aggregate_models.py).
+    Produces model_leaderboard.png.
+
+    Returns the path on success, None if there's only 1 model (single-model
+    workflow doesn't need this chart — make_before_after covers it).
+    """
+    data = _load_json(aggregated_path)
+    if not data or data.get("n_models", 0) < 2:
+        n = (data or {}).get("n_models", 0)
+        print(f"  ✗ model_leaderboard.png: need at least 2 models for "
+              f"comparison, found {n}. Run more models or skip.")
+        return None
+
+    models = data["models"]
+    # Stable order: qwen3b, gemma2b, llama3b (always preserve this order
+    # whether or not all three are present)
+    canonical_order = ["qwen3b", "gemma2b", "llama3b"]
+    tags = [t for t in canonical_order if t in models]
+
+    # Color per model (consistent across both subplots)
+    MODEL_COLORS = {
+        "qwen3b":  "#E76F51",   # terracotta — same as Qwen baseline color
+        "gemma2b": "#2A9D8F",   # teal
+        "llama3b": "#F4A261",   # sandy orange
+    }
+
+    fig, (ax_left, ax_right) = plt.subplots(1, 2, figsize=(16, 6.0))
+
+    # ----- LEFT: grouped bars, 4 tasks, 6 bars each (3 models × 2 conditions) -----
+    n_tasks = len(TASK_ORDER)
+    n_models = len(tags)
+    bar_w = 0.13
+    group_gap = 0.10
+    # Position bars: for each task, place 2*n_models bars
+    cluster_width = (2 * n_models) * bar_w
+    x_centers = np.arange(n_tasks) * (cluster_width + group_gap)
+
+    for mi, tag in enumerate(tags):
+        m = models[tag]
+        base_vals = [m["baseline"][t] for t in TASK_ORDER]
+        trained_vals = [m["trained"][t] for t in TASK_ORDER]
+        color = MODEL_COLORS.get(tag, "#888888")
+        # Baseline bar (lighter): first slot in pair
+        offset_base = (mi * 2 - n_models) * bar_w + bar_w / 2
+        offset_trained = offset_base + bar_w
+        ax_left.bar(x_centers + offset_base, base_vals, bar_w,
+                    color=color, alpha=0.45,
+                    label=f"{m['label']} — baseline",
+                    edgecolor="white", linewidth=0.4)
+        ax_left.bar(x_centers + offset_trained, trained_vals, bar_w,
+                    color=color, alpha=1.0,
+                    label=f"{m['label']} — trained",
+                    edgecolor="white", linewidth=0.4)
+
+    ax_left.set_xticks(x_centers)
+    ax_left.set_xticklabels([TASK_LABELS[t] for t in TASK_ORDER])
+    ax_left.set_ylabel("Average Score (30 episodes)")
+    ax_left.set_ylim(0, 1.0)
+    ax_left.axhline(0.5, color=THRESHOLD_COLOR, linestyle="--",
+                     linewidth=0.8, alpha=0.6, label="Success threshold")
+    ax_left.set_title("Per-task scores — baseline (light) vs trained (solid)")
+    ax_left.legend(loc="upper left", fontsize=8, ncol=1, framealpha=0.95)
+    ax_left.spines["top"].set_visible(False)
+    ax_left.spines["right"].set_visible(False)
+    ax_left.grid(axis="y", linestyle=":", alpha=0.4)
+
+    # ----- RIGHT: per-task Δ, grouped by model -----
+    bar_w_r = 0.22
+    cluster_w = n_models * bar_w_r
+    x_r = np.arange(n_tasks)
+
+    for mi, tag in enumerate(tags):
+        m = models[tag]
+        deltas = [m["lift"][t] for t in TASK_ORDER]
+        color = MODEL_COLORS.get(tag, "#888888")
+        offset = (mi - (n_models - 1) / 2) * bar_w_r
+        bars = ax_right.bar(x_r + offset, deltas, bar_w_r,
+                              color=color, alpha=0.95,
+                              label=m["label"], edgecolor="white", linewidth=0.4)
+        # Annotate
+        for bar, d, base in zip(bars, deltas, [m["baseline"][t] for t in TASK_ORDER]):
+            pct = (d / base * 100.0) if base > 0 else 0.0
+            label = f"{pct:+.0f}%"
+            y = bar.get_height()
+            va = "bottom" if y >= 0 else "top"
+            y_offset = 0.005 if y >= 0 else -0.005
+            ax_right.text(bar.get_x() + bar.get_width() / 2, y + y_offset,
+                           label, ha="center", va=va, fontsize=8,
+                           color=ANNOTATE_COLOR)
+
+    ax_right.axhline(0, color="#000", linewidth=0.6, alpha=0.4)
+    ax_right.set_xticks(x_r)
+    ax_right.set_xticklabels([TASK_LABELS[t] for t in TASK_ORDER])
+    ax_right.set_ylabel("Δ vs baseline (absolute score)")
+    ax_right.set_title("Per-task improvement after GRPO post-training")
+    ax_right.legend(loc="best", fontsize=9, framealpha=0.95)
+    ax_right.spines["top"].set_visible(False)
+    ax_right.spines["right"].set_visible(False)
+    ax_right.grid(axis="y", linestyle=":", alpha=0.4)
+
+    fig.suptitle("Model Comparison — GRPO Post-Training on TDS Compliance",
+                 fontsize=13, y=0.99)
+    plt.tight_layout(rect=[0, 0, 1, 0.97])
+    plt.savefig(output_path, dpi=120, bbox_inches="tight")
+    plt.close(fig)
+    return str(output_path)
+
+
 def main(argv=None) -> int:
     """Generate all available charts. Skips charts whose data isn't on disk yet."""
     out_paths = []
@@ -463,6 +579,16 @@ def main(argv=None) -> int:
             out_paths.append(p)
     except Exception as e:
         print(f"  ✗ adversarial_heatmap.png: {type(e).__name__}: {e}")
+
+    # Model leaderboard is optional (depends on multi-model aggregation having been run)
+    print("Model leaderboard (optional, multi-model only):")
+    try:
+        p = make_model_leaderboard()
+        if p:
+            print(f"  ✓ {p}")
+            out_paths.append(p)
+    except Exception as e:
+        print(f"  ✗ model_leaderboard.png: {type(e).__name__}: {e}")
 
     print(f"\nGenerated {len(out_paths)} charts.")
     return 0

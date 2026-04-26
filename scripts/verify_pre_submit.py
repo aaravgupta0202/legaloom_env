@@ -2,7 +2,7 @@
 """
 verify_pre_submit.py — pre-submission readiness check for LegaLoom-Env.
 
-Runs the 8-item checklist from the populate_results.py docstring:
+Runs the 9-item checklist:
 
   1.  populate_results.py runs without errors (--dry-run)
   2.  README.md.bak exists  (populate has been run at least once)
@@ -12,6 +12,8 @@ Runs the 8-item checklist from the populate_results.py docstring:
   6.  pytest tests/ reports 60 passed
   7.  HF Space frontmatter still valid (title, license, sdk, tags include openenv)
   8.  client.py imports cleanly (proxy for Space deployability)
+  9.  Multi-model artifacts consistency: aggregated_models.json and
+      model_leaderboard.png either both exist or both don't (sign of partial run)
 
 Each check prints PASS or FAIL with detail. Exits with status code = number
 of failed checks (0 = all pass).
@@ -164,6 +166,28 @@ def check_client_imports() -> Result:
     return r.fail(f"parse error: {p.stderr.strip()[:160]}")
 
 
+def check_multimodel_consistency() -> Result:
+    """If multi-model run was attempted, both aggregated_models.json and
+    model_leaderboard.png must exist. If neither exists, single-model workflow
+    is fine. Only fail if exactly one is present (partial run)."""
+    r = Result("Multi-model artifacts consistency")
+    agg = REPO / "aggregated_models.json"
+    chart = REPO / "model_leaderboard.png"
+    if agg.exists() and chart.exists():
+        return r.ok("both aggregated_models.json and model_leaderboard.png present")
+    if not agg.exists() and not chart.exists():
+        return r.ok("single-model workflow (no multi-model artifacts present)")
+    if agg.exists() and not chart.exists():
+        return r.fail(
+            "aggregated_models.json exists but model_leaderboard.png missing — "
+            "run `python scripts/generate_charts.py` to produce the chart"
+        )
+    return r.fail(
+        "model_leaderboard.png exists but aggregated_models.json missing — "
+        "run `python scripts/aggregate_models.py` to regenerate the data"
+    )
+
+
 def main() -> int:
     checks = [
         check_populate_dry_run(),
@@ -174,6 +198,7 @@ def main() -> int:
         check_tests_pass(),
         check_frontmatter(),
         check_client_imports(),
+        check_multimodel_consistency(),
     ]
 
     print("=" * 72)

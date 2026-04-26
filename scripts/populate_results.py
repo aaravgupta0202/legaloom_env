@@ -64,6 +64,7 @@ MARKERS = {
     "headline":      ("AUTO-HEADLINE-START",        "AUTO-HEADLINE-END"),
     "statrigor":     ("AUTO-STATRIGOR-START",       "AUTO-STATRIGOR-END"),
     "advcaption":    ("AUTO-ADVCAPTION-START",      "AUTO-ADVCAPTION-END"),
+    "multimodel":    ("AUTO-MULTIMODEL-START",      "AUTO-MULTIMODEL-END"),
 }
 
 
@@ -88,6 +89,7 @@ def load_artifacts() -> Dict[str, Optional[dict]]:
         "stats":       _load(REPO_ROOT / "statistical_results.json", required=True),
         "adversarial": _load(REPO_ROOT / "adversarial_results.json", required=False),
         "aggregated":  _load(REPO_ROOT / "aggregated_results.json",  required=False),
+        "models":      _load(REPO_ROOT / "aggregated_models.json",   required=False),
     }
 
 
@@ -350,6 +352,100 @@ def render_adv_caption(adversarial: Optional[dict]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Multi-model comparison section
+# ---------------------------------------------------------------------------
+
+DEFAULT_MULTIMODEL = (
+    "*Single-model results reported above. The codebase supports multi-model "
+    "comparison (see `scripts/aggregate_models.py`); add `training_scores_*.json` "
+    "files for additional models and re-run `populate_results.py` to populate "
+    "this section.*"
+)
+
+
+def render_multimodel(models_data: Optional[dict]) -> str:
+    """Render the multi-model comparison body.
+
+    - If aggregated_models.json missing or has fewer than 2 models, render the
+      "single model only — placeholder" text so the section reads cleanly.
+    - If 2+ models present, write a 3-part body:
+        1. One-paragraph headline naming the winner
+        2. Summary table (model | baseline avg | trained avg | Δ)
+        3. Reference to ./model_leaderboard.png + caption
+    """
+    if not models_data or models_data.get("n_models", 0) < 2:
+        return DEFAULT_MULTIMODEL
+
+    models = models_data["models"]
+    # Stable canonical ordering for the table
+    canonical = ["qwen3b", "gemma2b", "llama3b"]
+    ordered = [t for t in canonical if t in models]
+    # In case there are unknown tags, append them
+    for t in models:
+        if t not in ordered:
+            ordered.append(t)
+
+    # Rank by absolute lift to find winner
+    ranking = sorted(
+        ordered,
+        key=lambda t: -models[t]["lift_avg"],
+    )
+    winner = models[ranking[0]]
+
+    # 1. Headline paragraph
+    parts = []
+    if len(ranking) >= 2:
+        runner_up = models[ranking[1]]
+        rest = ", ".join(
+            f"{models[t]['label']} ({models[t]['lift_avg']*100:+.1f}%)"
+            for t in ranking[1:]
+        )
+        headline = (
+            f"Across the {len(ranking)} models tested, **{winner['label']}** "
+            f"showed the strongest absolute lift "
+            f"(**{winner['lift_avg']*100:+.1f}%** average across all four task "
+            f"pools), followed by {rest}. Same training configuration "
+            f"(40 GRPO steps, num_generations=8, single-phase task_hard) — "
+            f"the differences are entirely attributable to base-model "
+            f"capability and how it interacts with focused RL post-training "
+            f"on multi-step statutory reasoning."
+        )
+    else:
+        headline = (
+            f"Single-model run: **{winner['label']}** ({winner['lift_avg']*100:+.1f}%)."
+        )
+    parts.append(headline)
+    parts.append("")
+
+    # 2. Summary table
+    parts.append("| Model | Baseline avg | Trained avg | Δ |")
+    parts.append("|-------|-------------:|------------:|--:|")
+    for t in ordered:
+        m = models[t]
+        b = m["baseline_avg"]
+        tr = m["trained_avg"]
+        d = m["lift_avg"]
+        # Relative percent
+        pct = (d / b * 100.0) if b > 0 else 0.0
+        parts.append(f"| {m['label']} | {b:.3f} | {tr:.3f} | {pct:+.1f}% |")
+    parts.append("")
+
+    # 3. Chart reference + caption
+    parts.append("![Model Comparison Leaderboard](./model_leaderboard.png)")
+    parts.append("")
+    parts.append(
+        "*Cross-model comparison. Three open-source 2-3B models trained with "
+        "the same single-phase task_hard configuration (40 GRPO steps, "
+        "num_generations=8). The chart shows raw scores by task (left) and "
+        "per-task improvement (right). Models that benefit most from RL "
+        "post-training in this domain reveal which architectures handle "
+        "multi-step statutory reasoning effectively.*"
+    )
+
+    return "\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
 # Marker-bounded section replacement
 # ---------------------------------------------------------------------------
 
@@ -407,12 +503,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     stats = artifacts["stats"]
     adversarial = artifacts["adversarial"]
     aggregated = artifacts["aggregated"]
+    models = artifacts["models"]
 
     # Build replacement bodies once
     table_body = render_results_table(scores)
     headline_body = render_headline(scores)
     statrigor_body = render_statrigor(stats, aggregated)
     advcaption_body = render_adv_caption(adversarial)
+    multimodel_body = render_multimodel(models)
 
     files_updated: List[Path] = []
     summary: List[str] = []
@@ -432,6 +530,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             ("headline",      headline_body),
             ("statrigor",     statrigor_body),
             ("advcaption",    advcaption_body),
+            ("multimodel",    multimodel_body),
         ]:
             start_tag, _ = MARKERS[key]
             if f"<!-- {start_tag} -->" not in text:
