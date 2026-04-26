@@ -281,6 +281,28 @@ def rollout_batch(
 
 
 def episode_reward_fn(prompts, completions, **kwargs) -> List[float]:
+    """
+    GRPO-compatible reward function using full episode rollouts in a single completion.
+
+    The model emits a SEQUENCE of JSON actions in one completion. This function:
+    1. Parses every JSON action block from the completion
+    2. Replays them step-by-step in a fresh environment
+    3. Computes a graded reward:
+       - Full terminal reward if submit_answer was reached (the goal)
+       - Partial credit based on valid action progress otherwise
+
+    The partial credit creates reward variance even when the model fails to
+    complete the episode, giving GRPO a learning signal. The model is still
+    incentivized to reach submit_answer because that pays much more.
+
+    Anti-hacking guards:
+    - Workflow violations (e.g. submit before check_pan) get clamped low
+      (because env returns negative step_r, which is excluded from progress)
+    - Repeated identical actions don't accumulate reward beyond cap
+    - Invalid JSON or unknown actions count as 0 progress
+    - Maximum partial credit is capped at 0.40 — below the 0.5 success
+      threshold and below typical correct submission scores
+    """
     task_id = kwargs.get("task_id", "task_easy")
     base_seed = kwargs.get("seed", 42)
     rewards = []
@@ -300,35 +322,77 @@ def episode_reward_fn(prompts, completions, **kwargs) -> List[float]:
             cleaned = _re.sub(r'\n[ \t]*```[ \t]*$', '', cleaned, flags=_re.MULTILINE)
             action_blocks = _re.findall(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)?\}', cleaned, _re.DOTALL)
 
-            final_reward = 0.05
+            final_reward = 0.01
             submitted = False
-            trajectory_steps = []
+            valid_actions_taken = 0
+            distinct_action_types = set()
+            cumulative_step_reward = 0.0
 
             for block in action_blocks:
                 try:
                     action_dict = json.loads(block)
-                    action_type = action_dict.get("action_type", "")
-                    params = action_dict.get("parameters", {})
-                    if not action_type:
-                        continue
-                    result = env.step(TDSAction(action_type=action_type, parameters=params))
-                    trajectory_steps.append({"action": action_dict})
-                    if result.done:
-                        final_reward = clamp_score(float(result.reward))
-                        submitted = True
-                        break
-                except (json.JSONDecodeError, Exception):
+                except json.JSONDecodeError:
                     continue
 
-            rewards.append(clamp_score(final_reward))
+                action_type = action_dict.get("action_type", "")
+                params = action_dict.get("parameters", {})
+                if not action_type:
+                    continue
+
+                try:
+                    result = env.step(TDSAction(action_type=action_type, parameters=params))
+                except Exception:
+                    continue
+
+                step_r = float(result.reward) if result.reward is not None else 0.0
+
+                # Only count constructive progress (positive step rewards from env)
+                if step_r > 0:
+                    valid_actions_taken += 1
+                    distinct_action_types.add(action_type)
+                    cumulative_step_reward += step_r
+
+                if result.done:
+                    # Episode reached submit_answer — terminal grader score is authoritative
+                    final_reward = clamp_score(float(result.reward))
+                    submitted = True
+                    break
+
+            if not submitted:
+                # Partial credit: model made valid progress but never submitted.
+                # This creates GRPO advantage signal between completions that
+                # got further vs ones that didn't. Capped at 0.40 — well below
+                # the 0.5 success threshold and below typical correct submission scores.
+                progress_score = (
+                    0.05                                                   # base for any valid action
+                    + 0.05 * min(valid_actions_taken, 4)                   # cap progress reward
+                    + 0.04 * min(len(distinct_action_types), 4)            # diversity bonus
+                    + min(cumulative_step_reward, 0.20)                    # raw env step rewards
+                )
+                final_reward = min(progress_score, 0.40)
+                final_reward = max(final_reward, 0.01)  # never below SCORE_MIN
 
         except Exception:
-            rewards.append(0.01)
+            final_reward = 0.01
+
+        rewards.append(final_reward)
 
     return rewards
 
 
 def build_training_dataset(task_ids=None, examples_per_task=30, base_seed=42):
+    """Build training prompts from environment resets.
+
+    The prompt includes the FULL invoice text so the model can reason about
+    it offline. The model emits the complete action sequence
+    (read_invoice → check_pan → lookup_section → submit_answer) in one
+    completion, separated by newlines.
+
+    Without the invoice text in the prompt, every prompt for a given task
+    looks effectively identical to the model — so all 8 generations in a
+    GRPO group produce nearly identical output, reward variance collapses
+    to zero, advantage = 0, loss = 0, and no learning happens.
+    """
     from datasets import Dataset
 
     if task_ids is None:
@@ -340,13 +404,13 @@ def build_training_dataset(task_ids=None, examples_per_task=30, base_seed=42):
             seed = base_seed + i + hash(task_id) % 1000
             try:
                 task = sample_task(task_id, seed=seed, use_procedural=True)
+                # Include the FULL invoice text so the model can reason about it
+                invoice_text = task.get("invoice_text", "")[:1500]
                 prompt_text = (
-                    f"Task: {task_id}\n"
-                    f"Difficulty: {task['difficulty']}\n"
-                    f"Invoice: {task['invoice_id']}\n"
-                    f"Max steps: {task['max_steps']}\n"
-                    f"Start with read_invoice.\n\n"
-                    f"Output your action as JSON:"
+                    f"INVOICE:\n{invoice_text}\n\n"
+                    f"Solve this TDS compliance task. Output the COMPLETE sequence of "
+                    f"JSON actions (one per line), ending with submit_answer.\n\n"
+                    f"Output the action sequence now:"
                 )
                 examples.append({
                     "task_id": task_id,

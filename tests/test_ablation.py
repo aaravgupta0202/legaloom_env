@@ -176,14 +176,26 @@ def test_episode_reward_fn_does_not_inject_actions():
 
 
 def test_floor_reward_when_no_submission():
-    """If the model never submits, episode_reward_fn returns the floor (0.05),
-    NOT a value derived from injected actions."""
+    """If the model never submits, partial credit is allowed but capped well
+    below the 0.5 success threshold. This guarantees:
+      - GRPO has gradient signal between completions that took valid actions
+        vs ones that emitted garbage (variance in [0.01, 0.40])
+      - The model is still strongly incentivized to reach submit_answer,
+        because a correct submission scores ~0.99 vs ≤0.40 for any partial
+        progress
+      - Reward hacking via "always emit valid early-step actions and never
+        submit" is bounded — max reward 0.40 < 0.5 success threshold.
+    """
     from train_grpo import episode_reward_fn
 
-    # Simulate a completion that has NO submit_answer action
+    # Simulate a completion with valid early-step actions but no submit
     completion_no_submit = [{
         "role": "assistant",
-        "content": '{"action_type": "read_invoice", "parameters": {}}'
+        "content": (
+            '{"action_type": "read_invoice", "parameters": {}}\n'
+            '{"action_type": "check_pan", "parameters": {"pan": "AAAPL1234C"}}\n'
+            '{"action_type": "lookup_section", "parameters": {"description": "audit"}}'
+        )
     }]
 
     rewards = episode_reward_fn(
@@ -191,13 +203,22 @@ def test_floor_reward_when_no_submission():
         completions=[completion_no_submit],
         task_id="task_easy",
     )
-    # With patch: no submission = floor reward, regardless of any other
-    # action sequences. Score should NOT be >0.5 (which would indicate
-    # the trainer scored an unrelated path).
-    assert rewards[0] <= 0.1, (
-        f"No-submit completion got reward {rewards[0]}. "
-        f"This suggests the trainer is computing rewards from injected "
-        f"actions rather than the model's actual completion."
+
+    r = rewards[0]
+    # Lower bound: must be at least the floor (0.01)
+    assert r >= 0.01, f"Reward {r} below floor"
+    # Upper bound: must be capped strictly below 0.5 success threshold,
+    # AND below the design cap of 0.40
+    assert r <= 0.40, (
+        f"No-submit completion got reward {r}. Partial credit must be "
+        f"capped at 0.40 to prevent reward-hacking via never-submit policies. "
+        f"Found {r} > 0.40 — check episode_reward_fn's progress_score cap."
+    )
+    # Critical anti-hacking invariant: cannot reach success (0.5)
+    assert r < 0.5, (
+        f"No-submit completion crossed the 0.5 success threshold (got {r}). "
+        f"This would let a never-submit policy reach 'success', breaking the "
+        f"core training signal."
     )
 
 
