@@ -10,3 +10,6 @@ build/
 *.txt
 curl
 uv.lock
+.hypothesis/
+.pytest_cache/
+.ipynb_checkpoints/

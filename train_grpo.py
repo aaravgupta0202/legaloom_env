@@ -93,6 +93,19 @@ def rollout_episode(
     temperature: float = 0.7,
     max_new_tokens: int = 512,
 ) -> Dict[str, Any]:
+    """
+    Run a FULL episode: reset → multi-step loop → return final reward.
+
+    Key implementation notes:
+    - After read_invoice, the env returns the actual invoice text in the
+      ``invoice_text`` field of TDSObservation. We inject this into the next
+      user message so the model can read the vendor PAN, amounts, and
+      description. Without this, the model can only emit empty/guessed PAN
+      strings which Pydantic's CheckPanParams rejects (min_length=10).
+    - On JSON parse failure we don't break — we tell the model "your output
+      was not valid JSON" and let it retry. Improves robustness on weak
+      base-model outputs.
+    """
     if seed is None:
         seed = random.randint(1, 999999)
 
@@ -141,7 +154,25 @@ def rollout_episode(
 
         action_dict = _extract_action(generated)
 
+        # Permissive fallback: try multiple JSON extraction patterns before giving up.
+        # Some model outputs wrap JSON in markdown fences or include prose around it.
         if action_dict is None:
+            import re as _re
+            for pat in [
+                r"```json\s*(\{.*?\})\s*```",
+                r"```\s*(\{.*?\})\s*```",
+                r"(\{[^{}]*(?:\{[^{}]*\}[^{}]*)?\})",
+            ]:
+                m = _re.search(pat, generated, _re.DOTALL)
+                if m:
+                    try:
+                        action_dict = json.loads(m.group(1) if m.lastindex else m.group())
+                        break
+                    except Exception:
+                        continue
+
+        if action_dict is None:
+            # Don't break — give the model a retry chance with explicit instruction.
             trajectory.append({
                 "step": step,
                 "generated": generated[:200],
@@ -149,9 +180,13 @@ def rollout_episode(
                 "reward": 0.05,
                 "error": "no_valid_json",
             })
-            final_reward = 0.05
+            conversation.append({"role": "assistant", "content": generated})
+            conversation.append({"role": "user", "content":
+                "Your output was not valid JSON. Output exactly one JSON object: "
+                "{\"action_type\": \"...\", \"parameters\": {...}}"
+            })
             steps_used = step
-            break
+            continue
 
         action_type = action_dict.get("action_type", "")
         params = action_dict.get("parameters", {})
@@ -179,8 +214,18 @@ def rollout_episode(
                 break
 
             conversation.append({"role": "assistant", "content": generated})
+
+            # CRITICAL: include the invoice text after read_invoice succeeds.
+            # The env returns invoice_text in TDSObservation only after read_invoice.
+            # Without injecting it here, the model has no way to know the vendor PAN
+            # and emits empty PAN strings that Pydantic rejects (min_length=10).
+            invoice_block = ""
+            invoice_text = getattr(result, "invoice_text", None) or ""
+            if action_type == "read_invoice" and invoice_text:
+                invoice_block = f"\nINVOICE:\n{invoice_text[:1500]}\n"
+
             obs_text = (
-                f"Step {step} result: {result.action_result[:300]}\n"
+                f"Step {step} result: {result.action_result[:300]}{invoice_block}\n"
                 f"Available: {result.available_actions}\n"
                 f"Steps used: {result.steps_used}/{result.max_steps}\n\n"
                 f"Output your next action as JSON:"
