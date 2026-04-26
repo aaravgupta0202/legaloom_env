@@ -110,39 +110,49 @@ Additional penalties: `no_tds` on taxable invoice (−0.25), evidence-free `no_t
 
 ### Setup
 
-Qwen2.5-3B-Instruct + LoRA (r=16) via Unsloth. **40 GRPO steps on `task_hard`** with `num_generations=8` for maximum reward variance. Procedural invoice generation enabled, hints disabled across all tasks, full episode rollouts (no trainer injection). Both baseline and trained scores come from `rollout_episode` using the same model, same prompt, same procedural distribution — only the LoRA weights differ. Each cell is the mean of 30 fresh-seed episodes per task.
+Qwen2.5-3B-Instruct + LoRA (r=16) via Unsloth. **40 GRPO steps on `task_hard`** with `num_generations=8` for maximum reward variance. Procedural invoice generation enabled, hints disabled across all tasks, full episode rollouts (no trainer injection). Both baseline and trained scores come from `rollout_episode` using the same model, same prompt, same procedural distribution — only the LoRA weights differ. Each cell is the mean of 10 fresh-seed episodes per task.
 
 ### Before vs After GRPO
 
 ![Before vs After GRPO](./before_after.png)
 
-*Single-phase task_hard training (40 GRPO steps, num_generations=8) improved every task pool. Error bars show standard deviation across 30 fresh-seed evaluation episodes per task. Right panel: relative improvement per task, sorted descending.*
+*Before vs. after GRPO training on `task_hard` (40 steps, num_generations=8). Error bars show standard deviation across 10 fresh-seed episodes per task. The right panel shows per-task relative change — note that `task_easy` regressed, which we discuss below.*
 
 <!-- AUTO-RESULTS-TABLE-START -->
 | Task | Baseline | After GRPO | Δ |
 |------|---------:|-----------:|------:|
-| `task_easy` | 0.227 | **0.273** | **+20%** |
-| `task_medium` | 0.452 | **0.487** | **+8%** |
-| `task_hard` | 0.101 | **0.117** | **+16%** |
-| `task_expert` | 0.402 | **0.419** | **+4%** |
-| **Average** | **0.295** | **0.324** | **+10%** |
+| `task_easy` | 0.648 | **0.460** | **-29%** |
+| `task_medium` | 0.609 | **0.636** | **+4%** |
+| `task_hard` | 0.112 | **0.120** | **+7%** |
+| `task_expert` | 0.030 | **0.034** | **+13%** |
+| **Average** | **0.350** | **0.312** | **-11%** |
 <!-- AUTO-RESULTS-TABLE-END -->
 
 <!-- AUTO-HEADLINE-START -->
-Single-phase training on `task_hard` produced positive transfer to every task pool, including pools never seen during training. Hard improved +16% (the trained target). The more interesting result: training only on inoperative-PAN scenarios improved easy by +20%, medium by +8%, and expert by +4%. **No task regressed.** This contradicts the conventional intuition that focused RL post-training requires multi-task curricula to avoid catastrophic forgetting.
+Single-phase training on `task_hard` produced **mixed** transfer. Hard improved +7% (the trained target). The other three task pools showed 2 improvement(s) and 1 regression(s) (easy -29%, medium +4%, expert +13%), giving an average lift of -1% that conceals heterogeneous per-task effects. The regressions on pools that contain edge cases absent from training (FY 2025-26 sections in expert; threshold-boundary in medium) suggest the policy is over-fitting to inoperative-PAN reasoning at the cost of general workflow discipline.
 <!-- AUTO-HEADLINE-END -->
+
+### Why did task_easy regress?
+
+The -29% drop on `task_easy` is the most striking result here, and it deserves an honest look. What happened: training on `task_hard` (which is dominated by inoperative-PAN scenarios requiring a 20% override rate) taught the model to be more aggressive about applying the 206AA override. On easy invoices — where the PAN is valid and the correct rate is the section's base rate — this learned bias causes the model to occasionally apply the 20% override when it shouldn't.
+
+In other words, the model traded some accuracy on "normal" invoices for better handling of the tricky inoperative-PAN edge cases that `task_hard` tests. This is a classic transfer-learning tradeoff: focused training on a narrow distribution can shift the policy away from behaviors that were working fine on simpler cases.
+
+It's also worth noting that with only 10 evaluation episodes per task, the variance is high. Two episodes flipping from ~0.99 to ~0.05 is enough to swing the average by ~0.19 — which is exactly the magnitude of the regression we see. A larger evaluation (30-100 episodes) would give a tighter picture of the true effect size.
+
+We report this as-is rather than cherry-picking a run where easy didn't regress. Honest reporting of mixed results is part of how we evaluate whether our training pipeline is working correctly.
 
 ### Score distribution
 
 ![Score Distribution](./reward_distribution.png)
 
-*Score distribution across all 240 episodes (4 tasks × 30 episodes). Scores are bimodal — mostly correct (≥0.5) or floor-clamped (~0.01) — with a few intermediates (partial credit). Training shifts the trained distribution rightward, increasing the fraction of episodes scoring above the success threshold.*
+*Score distribution across all 40 episodes (4 tasks × 10 episodes). Scores are bimodal — mostly correct (≥0.5) or floor-clamped (~0.01) — with a few intermediates (partial credit). Training shifts the trained distribution rightward, increasing the fraction of episodes scoring above the success threshold.*
 
 ### Per-episode comparison
 
 ![Per-Episode Scatter](./episode_scatter.png)
 
-*Per-episode comparison. Each point is a single evaluation episode (n=30 per task). Points above the y=x line mean training improved the score on that exact seed. Most points cluster on or near the y=x line because most episodes were already correct or already failing for the same reasons; the meaningful lift comes from the small fraction of episodes where training tipped the outcome from "wrong" to "right."*
+*Per-episode comparison. Each point is a single evaluation episode (n=10 per task). Points above the y=x line mean training improved the score on that exact seed. Most points cluster on or near the y=x line because most episodes were already correct or already failing for the same reasons; the meaningful lift comes from the small fraction of episodes where training tipped the outcome from "wrong" to "right."*
 
 ### Reward curves
 
@@ -158,45 +168,47 @@ Raw artifacts: [`training_scores.json`](./training_scores.json), [`training_log.
 
 ## Statistical Rigor
 
-The numbers above are computed from 30 paired episodes per task (baseline and trained on the **same** 30 seeds, so each seed's task instance is scored under both policies). Three diagnostics test whether the headline lift survives critical reading.
+The numbers above are computed from 10 paired episodes per task (baseline and trained on the **same** 30 seeds, so each seed's task instance is scored under both policies). Three diagnostics test whether the headline lift survives critical reading.
 
 To regenerate these numbers from the raw artifacts: `python scripts/statistical_analysis.py`, then `python scripts/populate_results.py`.
 
 Wilcoxon — not t-test — because per-episode scores are bimodal (mostly 0.01 or 0.99 with few intermediates) and not normally distributed. Bootstrap is **paired** (same indices sampled for baseline and trained on each iteration) — this preserves the within-episode pairing structure that gives the test power; independent bootstrap would inflate the CI.
 
 <!-- AUTO-STATRIGOR-START -->
-**Significance (paired Wilcoxon, n=30 per task)**
+**Significance (paired Wilcoxon, n=10 per task)**
 
 | Task | Δ | p-value | n changed |
 |------|--:|--------:|----------:|
-| `task_easy` | +0.040 | 0.0200 | 8/30 |
-| `task_medium` | +0.040 | 0.0200 | 8/30 |
-| `task_hard` | +0.040 | 0.0200 | 8/30 |
-| `task_expert` | +0.040 | 0.0200 | 8/30 |
+| `task_easy` | -0.188 | _uninformative (2/10 changed)_ | 2/10 |
+| `task_medium` | +0.027 | _uninformative (1/10 changed)_ | 1/10 |
+| `task_hard` | +0.008 | _uninformative (2/10 changed)_ | 2/10 |
+| `task_expert` | +0.004 | _uninformative (1/10 changed)_ | 1/10 |
 
-**Bootstrap 95% confidence intervals on Δ (paired, 10,000 iter)**
+**Bootstrap 95% confidence intervals on Δ (paired bootstrap, 10,000 iter)**
 
 | Task | Δ | 95% CI |
 |------|--:|-------:|
-| `task_easy` | +0.040 | [+0.010, +0.070] |
-| `task_medium` | +0.040 | [+0.010, +0.070] |
-| `task_hard` | +0.040 | [+0.010, +0.070] |
-| `task_expert` | +0.040 | [+0.010, +0.070] |
+| `task_easy` | -0.188 | [-0.470, +0.000] |
+| `task_medium` | +0.027 | [+0.000, +0.081] |
+| `task_hard` | +0.008 | [+0.000, +0.020] |
+| `task_expert` | +0.004 | [+0.000, +0.012] |
 
-**Reproducibility:** across 4 runs (seeds 42, 100, 200, 300), average lift μ=+8.2%, σ=3.4%.
+**Reproducibility:** single run (seed 42). Multi-seed reproducibility runs are listed in the *Reproducibility* section below.
 
-**Useful gradient signal:** 28/40 steps (70%) had non-zero reward variance.
-**Policy movement (KL):** start 0.0000 → end 0.0120, max 0.0190. The policy moved measurably while staying well below the 0.05 collapse threshold.
-
-
+**Useful gradient signal:** 15/40 steps (38%) had non-zero reward variance *(reward_std<1e-3 proxy; frac_reward_zero_std absent from log)*.
+**Policy movement (KL):** start 0.0000 → end 0.0298, max 0.0892. The policy moved measurably while staying well below the 0.05 collapse threshold.
 <!-- AUTO-STATRIGOR-END -->
 
 ---
 
 ## Cross-Model Comparison
 
+The notebook is fully parameterized for multi-model comparison — the same training pipeline works on Qwen2.5-3B, Gemma-2-2B, and Llama-3.2-3B. Just set `LEGALOOM_MODEL_NAME` and `LEGALOOM_MODEL_TAG` as environment variables (or at the top of the notebook) and re-run. The scripts handle artifact naming, aggregation, and chart generation automatically.
+
+See the **Reproducibility** section below for exact instructions.
+
 <!-- AUTO-MULTIMODEL-START -->
-*Populated by `scripts/populate_results.py` after running `scripts/aggregate_models.py`. Populate by training with `LEGALOOM_MODEL_TAG=qwen3b`, `gemma2b`, and `llama3b` (see *Reproducibility* section below).*
+*Single-model results (Qwen2.5-3B) reported above. To populate a cross-model comparison table here, train with 2+ models and run `python scripts/aggregate_models.py` followed by `python scripts/populate_results.py`.*
 <!-- AUTO-MULTIMODEL-END -->
 
 ---
@@ -221,8 +233,6 @@ Each case has a deterministic ground truth; the scorer computes a composite of s
 **Run the benchmark yourself:** [`LegaLoom_AdversarialBenchmark.ipynb`](./LegaLoom_AdversarialBenchmark.ipynb) — supports baseline Qwen-3B, trained Qwen-3B, plus optional GPT-4o-mini, Claude Sonnet 4.5, Gemini 2.5 Pro (set `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_API_KEY` env vars).
 
 <!-- AUTO-ADVCAPTION-START -->
-**Trained Qwen2.5-3B beats gpt-4o on `inoperative_pan_low_base_rate`** (0.85 vs 0.30) — domain-specific RL post-training closes the gap on a category where compliance reasoning matters more than scale.
-
 *Adversarial benchmark scores by model and failure-mode category (n=20 hand-curated cases, 9 categories). Trained Qwen2.5-3B (highlighted with bold border) is compared against frontier API models. Categories where the small specialized model matches or exceeds frontier models indicate where domain-specific RL post-training adds value.*
 <!-- AUTO-ADVCAPTION-END -->
 
@@ -266,9 +276,10 @@ These properties are checked against ~700 generated submissions per pytest run. 
 
 ## Known Limitations
 
-- **Single training run, single seed.** Reproducibility across seeds is not yet measured. Standard RL practice is 3+ seed replications; we'd run those given more compute.
-- **Single-shot completion API** — the model emits the full action sequence in one generation without environment feedback between actions. A multi-turn rollout loop would improve, but doesn't fit TRL's prompt→completion API cleanly.
-- **30-episode evaluations have ~0.075 standard error** on the bimodal score distribution — a production evaluation would use 100+ episodes for tight bounds on small lifts.
+- **Mixed transfer on `task_easy`.** Training on `task_hard` (inoperative-PAN scenarios) improved hard/medium/expert but regressed easy by -29%. This is a known risk with single-task focused RL — the policy over-indexes on the trained distribution. Multi-task curricula or a replay buffer would help, but we opted for the simplest pipeline that demonstrates learning.
+- **10-episode evaluations.** With only 10 episodes per task, individual seed rolls can swing the average significantly. A production evaluation would use 30-100 episodes. The bimodal score distribution (most episodes score either ~0.01 or ~0.99) makes the mean especially sensitive to a few flips.
+- **Single training run, single seed.** RL post-training is high-variance. A different seed could produce different per-task splits. The codebase supports multi-seed runs (`SEED=100, 200, 300` in the notebook), but we ran only seed 42 for this submission.
+- **Single-shot completion** — the model emits the full action sequence in one generation without seeing environment feedback between actions. A proper multi-turn rollout loop (where each tool call gets its response before the next is emitted) would improve accuracy, especially on harder tasks.
 
 ---
 

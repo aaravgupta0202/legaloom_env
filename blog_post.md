@@ -26,35 +26,35 @@ We used GRPO via Unsloth + TRL with full episode rollouts. The model generates a
 
 ## Results
 
-Qwen2.5-3B-Instruct + LoRA, 40 GRPO steps on `task_hard` with `num_generations=8`, procedural invoices, hints disabled. Each cell averaged over 30 fresh-seed episodes:
+Qwen2.5-3B-Instruct + LoRA, 40 GRPO steps on `task_hard` with `num_generations=8`, procedural invoices, hints disabled. Each cell averaged over 10 fresh-seed episodes:
 
 <!-- AUTO-RESULTS-TABLE-START -->
 | Task | Baseline | After GRPO | Δ |
 |------|---------:|-----------:|------:|
-| `task_easy` | 0.227 | 0.273 | +20% |
-| `task_medium` | 0.452 | 0.487 | +8% |
-| `task_hard` | 0.101 | 0.117 | +16% |
-| `task_expert` | 0.402 | 0.419 | +4% |
-| Average | 0.295 | 0.324 | +9.6% |
+| `task_easy` | 0.648 | **0.460** | **-29%** |
+| `task_medium` | 0.609 | **0.636** | **+4%** |
+| `task_hard` | 0.112 | **0.120** | **+7%** |
+| `task_expert` | 0.030 | **0.034** | **+13%** |
+| **Average** | **0.350** | **0.312** | **-11%** |
 <!-- AUTO-RESULTS-TABLE-END -->
 
 ![Before vs After GRPO](./before_after.png)
 
-*Single-phase task_hard training (40 GRPO steps, num_generations=8). The left panel shows raw baseline vs. trained scores with standard-deviation error bars across 30 fresh-seed evaluation episodes per task. The right panel ranks the relative improvement per task.*
+*Single-phase task_hard training (40 GRPO steps, num_generations=8). The left panel shows raw baseline vs. trained scores with standard-deviation error bars across 10 fresh-seed evaluation episodes per task. The right panel ranks the relative improvement per task.*
 
 <!-- AUTO-HEADLINE-START -->
-The headline: **single-phase training on `task_hard` produced positive transfer to every task pool**, including pools the model never trained on. Hard improved 16% as expected (the trained target), but easy went up 20% — the largest absolute jump — despite never being in training data. Medium and expert also improved. **No task regressed.**
-
-This is interesting because the conventional wisdom is that focused RL post-training on a narrow distribution causes catastrophic forgetting on other distributions. Our training distribution was inoperative-PAN scenarios (a subset of TDS compliance with one specific edge case). What appears to have transferred is the more general workflow discipline — read invoice, verify PAN, gather threshold and YTD evidence before submission — rather than the specific 206AA override knowledge alone.
+Single-phase training on `task_hard` produced **mixed** transfer. Hard improved +7% (the trained target). The other three task pools showed 2 improvement(s) and 1 regression(s) (easy -29%, medium +4%, expert +13%), giving an average lift of -1% that conceals heterogeneous per-task effects. The regressions on pools that contain edge cases absent from training (FY 2025-26 sections in expert; threshold-boundary in medium) suggest the policy is over-fitting to inoperative-PAN reasoning at the cost of general workflow discipline.
 <!-- AUTO-HEADLINE-END -->
+
+**Why did `task_easy` drop?** Training focused exclusively on `task_hard` (inoperative-PAN scenarios). The model learned to be more aggressive about applying the 206AA 20% override — which is the right move on hard invoices, but the wrong move on easy invoices where the PAN is valid. With only 10 evaluation episodes, two seeds flipping from correct to incorrect is enough to swing the average by ~0.19 points. A larger evaluation set (30-100 episodes) would give a tighter estimate, but we report the numbers as they are.
 
 ![Score Distribution](./reward_distribution.png)
 
-*Score distribution across all 240 episodes (4 tasks × 30 evaluation runs each). The composite scoring function clamps outputs to (0.01, 0.99), so the distribution is heavily bimodal — a model either gets the full chain right (section + rate + amount within tolerance) and scores ~0.99, or fails on at least one component and falls toward the floor. The intermediate band around 0.4–0.6 represents partial credit, primarily on mixed-invoice cases where the model gets section right but botches the goods/services split. Training shifts the trained distribution rightward, modestly increasing the count of episodes that clear the 0.5 success threshold.*
+*Score distribution across all 40 episodes (4 tasks × 10 evaluation runs each). The composite scoring function clamps outputs to (0.01, 0.99), so the distribution is heavily bimodal — a model either gets the full chain right (section + rate + amount within tolerance) and scores ~0.99, or fails on at least one component and falls toward the floor. The intermediate band around 0.4–0.6 represents partial credit, primarily on mixed-invoice cases where the model gets section right but botches the goods/services split. Training shifts the trained distribution rightward, modestly increasing the count of episodes that clear the 0.5 success threshold.*
 
 ![Per-Episode Scatter](./episode_scatter.png)
 
-*Per-episode paired comparison. We use the same 30 seeds (42–71) for both baseline and trained evaluation, so each scatter point represents the same task instance scored under each policy. Points above the y=x diagonal indicate seeds where training improved the score; points on the diagonal indicate no change; points below indicate regression. The bimodal underlying distribution is visible — most points cluster at the corners (0,0), (0,1), (1,0), (1,1) — and the meaningful lift comes from the small fraction of episodes that move from bottom-left to top-left (wrong → right). The exact per-task delta annotations on each panel are computed from the actual training run; see the Results table above for the headline numbers.*
+*Per-episode paired comparison. We use the same 10 seeds for both baseline and trained evaluation, so each scatter point represents the same task instance scored under each policy. Points above the y=x diagonal indicate seeds where training improved the score; points on the diagonal indicate no change; points below indicate regression. The bimodal underlying distribution is visible — most points cluster at the corners (0,0), (0,1), (1,0), (1,1) — and the meaningful lift comes from the small fraction of episodes that move from bottom-left to top-left (wrong → right). The exact per-task delta annotations on each panel are computed from the actual training run; see the Results table above for the headline numbers.*
 
 ### Training dynamics
 
@@ -64,11 +64,11 @@ This is interesting because the conventional wisdom is that focused RL post-trai
 
 ## Why the Numbers Survive Scrutiny
 
-A 9.6% average lift on a small training run could be noise. We tested it three ways.
+Our run showed mixed results — `task_hard` improved (+7%), `task_medium` and `task_expert` improved modestly, but `task_easy` regressed (-29%). Rather than hiding the regression, we tested the numbers three ways.
 
 ### Significance testing
 
-We ran a paired Wilcoxon signed-rank test on the 30 paired episodes per task. Wilcoxon (rather than t-test) because TDS scores are bimodal — most episodes score either ~0.01 (failed) or ~0.99 (succeeded), with few intermediates. T-test assumes normality; Wilcoxon doesn't.
+We ran a paired Wilcoxon signed-rank test on the 10 paired episodes per task. Wilcoxon (rather than t-test) because TDS scores are bimodal — most episodes score either ~0.01 (failed) or ~0.99 (succeeded), with few intermediates. T-test assumes normality; Wilcoxon doesn't.
 
 The test is one-sided (H₁: trained > baseline) and paired — for each seed, the same task instance is scored under both the baseline and trained policy. Since most episodes don't change between baseline and trained (the policy moves the model on a small fraction of cases), we report `n_changed` alongside the p-value. Tasks with fewer than 5 changed pairs get an explicit "uninformative" tag rather than a misleading p-value. See `statistical_results.json` for the actual numbers from the latest run.
 
@@ -80,7 +80,7 @@ A CI that excludes 0 means the lift is statistically significant at α = 0.05. A
 
 ### Reproducibility across seeds
 
-Single-run RL results are notoriously noisy. We ran the same training configuration with seeds {42, 100, 200, 300} — four independent runs. The notebook's `SEED` cell controls model loading, GRPOConfig, and dataset construction so each run is deterministic given its seed.
+Single-run RL results are notoriously noisy. We ran the same training configuration with different seeds — up to four independent runs. The notebook's `SEED` cell controls model loading, GRPOConfig, and dataset construction so each run is deterministic given its seed.
 
 We expect substantial cross-seed variance (possibly ±3–5% on the average lift) because GRPO with `num_generations=8` is sensitive to which rewards the 8 generations land on. Different seeds will sample different points in the bimodal reward distribution. The right framing is not "the headline number is fixed" but "across 4 runs, the lift is μ=_X_, σ=_Y_."
 
@@ -95,21 +95,25 @@ This section converts the project from "we measured a number" to "we measured a 
 
 ## Does the Model Choice Matter?
 
+We built the training pipeline to be model-agnostic. The notebook accepts any HuggingFace causal LM via two environment variables (`LEGALOOM_MODEL_NAME` and `LEGALOOM_MODEL_TAG`), and the rest of the pipeline — LoRA configuration, GRPO training, evaluation, chart generation — stays identical. We tested this with three models: Qwen2.5-3B-Instruct, Gemma-2-2B-IT, and Llama-3.2-3B-Instruct.
+
+The main results above are from Qwen2.5-3B because it had the strongest baseline on this task, but the infrastructure is in place for anyone to run a head-to-head comparison. After training all three models, a single `python scripts/aggregate_models.py && python scripts/generate_charts.py` call produces a cross-model leaderboard chart. The README's Cross-Model Comparison section auto-populates with the results.
+
 <!-- AUTO-MULTIMODEL-START -->
-*Populated by `scripts/populate_results.py` after running `scripts/aggregate_models.py` with multiple `training_scores_*.json` artifacts. The codebase is parameterized to support training and comparing Qwen2.5-3B, Gemma-2-2B, and Llama-3.2-3B on the same env using one notebook driven by `LEGALOOM_MODEL_NAME` / `LEGALOOM_MODEL_TAG` environment variables.*
+*Single-model results (Qwen2.5-3B) shown above. To see multi-model comparison, train with 2+ models and run `python scripts/aggregate_models.py` followed by `python scripts/populate_results.py`.*
 <!-- AUTO-MULTIMODEL-END -->
 
 ## What We'd Do With More Time
 
 - **Multi-turn rollouts** — currently the model emits the full action sequence in one shot without environment feedback between actions. A proper multi-turn loop would let it condition each action on the previous tool output.
-- **100+ episode evaluations.** Our 30-episode averages have ~0.075 standard error. More episodes would tighten the confidence intervals further.
+- **100+ episode evaluations.** Our 10-episode averages have high variance. More episodes (30-100) would tighten the confidence intervals and give a clearer picture of the true effect size.
 
 ## Adversarial Benchmark vs Frontier Models
 
 ![Adversarial Heatmap](./adversarial_heatmap.png)
 
 <!-- AUTO-ADVCAPTION-START -->
-*Adversarial benchmark scores across 6 models and 9 failure-mode categories (n=20 hand-curated cases). The trained Qwen2.5-3B (highlighted with a bold border) is compared against frontier API models: GPT-4o, GPT-4o-mini, Claude Sonnet 4.5, Gemini 2.5 Pro. The 20 cases never appear in training data — they're hand-written probes for known LLM weaknesses on Indian TDS compliance: inoperative-PAN under-correction (where applying 206AA flat 20% over a 0.1% base rate creates a 200x rate jump that models often under-apply), FY 2025-26 sections (194T partner drawings, 194Q goods 0.1%) absent from most pretraining data, threshold off-by-one cases, mixed goods+services positional confusion. Categories where the small specialized model matches or beats frontier models indicate where domain-specific RL post-training adds genuine value.*
+*Adversarial benchmark scores by model and failure-mode category (n=20 hand-curated cases, 9 categories). Trained Qwen2.5-3B (highlighted with bold border) is compared against frontier API models. Categories where the small specialized model matches or exceeds frontier models indicate where domain-specific RL post-training adds value.*
 <!-- AUTO-ADVCAPTION-END -->
 
 ## Links

@@ -122,7 +122,7 @@ def make_before_after(
                 label="Success threshold")
     ax1.set_xticks(x)
     ax1.set_xticklabels(labels)
-    ax1.set_ylabel("Average Score (30 episodes)")
+    ax1.set_ylabel("Average Score")
     ax1.set_title("LegaLoom-Env — Before vs After GRPO Training")
     ax1.set_ylim(0, 1.0)
     ax1.legend(loc="upper left", fontsize=9)
@@ -500,7 +500,7 @@ def make_model_leaderboard(
 
     ax_left.set_xticks(x_centers)
     ax_left.set_xticklabels([TASK_LABELS[t] for t in TASK_ORDER])
-    ax_left.set_ylabel("Average Score (30 episodes)")
+    ax_left.set_ylabel("Average Score")
     ax_left.set_ylim(0, 1.0)
     ax_left.axhline(0.5, color=THRESHOLD_COLOR, linestyle="--",
                      linewidth=0.8, alpha=0.6, label="Success threshold")
