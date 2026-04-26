@@ -28,6 +28,7 @@ We used GRPO via Unsloth + TRL with full episode rollouts. The model generates a
 
 Qwen2.5-3B-Instruct + LoRA, 40 GRPO steps on `task_hard` with `num_generations=8`, procedural invoices, hints disabled. Each cell averaged over 30 fresh-seed episodes:
 
+<!-- AUTO-RESULTS-TABLE-START -->
 | Task | Baseline | After GRPO | Δ |
 |------|---------:|-----------:|------:|
 | `task_easy` | 0.227 | 0.273 | +20% |
@@ -35,14 +36,17 @@ Qwen2.5-3B-Instruct + LoRA, 40 GRPO steps on `task_hard` with `num_generations=8
 | `task_hard` | 0.101 | 0.117 | +16% |
 | `task_expert` | 0.402 | 0.419 | +4% |
 | Average | 0.295 | 0.324 | +9.6% |
+<!-- AUTO-RESULTS-TABLE-END -->
 
 ![Before vs After GRPO](./before_after.png)
 
-*Single-phase task_hard training (40 GRPO steps, num_generations=8) improved every task pool. The left panel shows raw baseline vs. trained scores with standard-deviation error bars across 30 fresh-seed evaluation episodes per task. The right panel ranks the relative improvement: hard (the trained target) gained 16%, but easy gained 20% — the largest jump despite the model never seeing easy tasks during training. Medium and expert also improved. No task regressed.*
+*Single-phase task_hard training (40 GRPO steps, num_generations=8). The left panel shows raw baseline vs. trained scores with standard-deviation error bars across 30 fresh-seed evaluation episodes per task. The right panel ranks the relative improvement per task.*
 
+<!-- AUTO-HEADLINE-START -->
 The headline: **single-phase training on `task_hard` produced positive transfer to every task pool**, including pools the model never trained on. Hard improved 16% as expected (the trained target), but easy went up 20% — the largest absolute jump — despite never being in training data. Medium and expert also improved. **No task regressed.**
 
-This is interesting because the conventional wisdom is that focused RL post-training on a narrow distribution causes catastrophic forgetting on other distributions. Our training distribution was inoperative-PAN scenarios (a subset of TDS compliance with one specific edge case). What appears to have transferred is the more general workflow discipline — read invoice, verify PAN, gather threshold and YTD evidence before submission — rather than the specific 206AA override knowledge alone. The smaller +4% on expert (which contains FY 2025-26 sections like 194T and 194Q the base model likely didn't see in pretraining) suggests transfer is bottlenecked by parametric knowledge of new sections, not by reasoning ability.
+This is interesting because the conventional wisdom is that focused RL post-training on a narrow distribution causes catastrophic forgetting on other distributions. Our training distribution was inoperative-PAN scenarios (a subset of TDS compliance with one specific edge case). What appears to have transferred is the more general workflow discipline — read invoice, verify PAN, gather threshold and YTD evidence before submission — rather than the specific 206AA override knowledge alone.
+<!-- AUTO-HEADLINE-END -->
 
 ![Score Distribution](./reward_distribution.png)
 
@@ -98,7 +102,9 @@ This section converts the project from "we measured a number" to "we measured a 
 
 ![Adversarial Heatmap](./adversarial_heatmap.png)
 
+<!-- AUTO-ADVCAPTION-START -->
 *Adversarial benchmark scores across 6 models and 9 failure-mode categories (n=20 hand-curated cases). The trained Qwen2.5-3B (highlighted with a bold border) is compared against frontier API models: GPT-4o, GPT-4o-mini, Claude Sonnet 4.5, Gemini 2.5 Pro. The 20 cases never appear in training data — they're hand-written probes for known LLM weaknesses on Indian TDS compliance: inoperative-PAN under-correction (where applying 206AA flat 20% over a 0.1% base rate creates a 200x rate jump that models often under-apply), FY 2025-26 sections (194T partner drawings, 194Q goods 0.1%) absent from most pretraining data, threshold off-by-one cases, mixed goods+services positional confusion. Categories where the small specialized model matches or beats frontier models indicate where domain-specific RL post-training adds genuine value.*
+<!-- AUTO-ADVCAPTION-END -->
 
 ## Links
 
