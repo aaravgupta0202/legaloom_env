@@ -116,24 +116,37 @@ def rollout_episode(
 
     for step in range(1, max_steps + 1):
         try:
-            inputs = tokenizer.apply_chat_template(
+            # Use return_dict=True to get input_ids AND attention_mask.
+            # Without attention_mask, generate() warns and may produce
+            # degraded output when batch padding interacts with eos==pad.
+            enc = tokenizer.apply_chat_template(
                 conversation,
                 return_tensors="pt",
                 add_generation_prompt=True,
-            ).to(model.device)
+                return_dict=True,
+            )
+            input_ids = enc["input_ids"].to(model.device)
+            attention_mask = enc.get("attention_mask")
+            if attention_mask is not None:
+                attention_mask = attention_mask.to(model.device)
+
+            # Use the tokenizer's actual pad_token_id when available;
+            # fall back to eos only if no distinct pad token is set.
+            pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
 
             output = model.generate(
-                inputs,
+                input_ids,
+                attention_mask=attention_mask,
                 max_new_tokens=max_new_tokens,
                 temperature=temperature,
                 do_sample=temperature > 0,
-                pad_token_id=tokenizer.eos_token_id,
+                pad_token_id=pad_id,
                 top_p=0.9,
                 repetition_penalty=1.1,
             )
 
             generated = tokenizer.decode(
-                output[0][inputs.shape[1]:],
+                output[0][input_ids.shape[1]:],
                 skip_special_tokens=True,
             ).strip()
         except Exception:
