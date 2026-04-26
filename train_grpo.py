@@ -116,14 +116,23 @@ def rollout_episode(
 
     for step in range(1, max_steps + 1):
         try:
-            inputs = tokenizer.apply_chat_template(
+            # apply_chat_template with return_dict=True yields both input_ids
+            # and attention_mask. Without an explicit attention_mask, models
+            # where pad_token_id == eos_token_id (Qwen2.5 family) have
+            # generation degrade after multi-turn — the model can interpret
+            # earlier EOS tokens as padding and produce empty output.
+            chat = tokenizer.apply_chat_template(
                 conversation,
                 return_tensors="pt",
                 add_generation_prompt=True,
-            ).to(model.device)
+                return_dict=True,
+            )
+            input_ids = chat["input_ids"].to(model.device)
+            attention_mask = chat["attention_mask"].to(model.device)
 
             output = model.generate(
-                inputs,
+                input_ids=input_ids,
+                attention_mask=attention_mask,
                 max_new_tokens=max_new_tokens,
                 temperature=temperature,
                 do_sample=temperature > 0,
@@ -133,10 +142,16 @@ def rollout_episode(
             )
 
             generated = tokenizer.decode(
-                output[0][inputs.shape[1]:],
+                output[0][input_ids.shape[1]:],
                 skip_special_tokens=True,
             ).strip()
-        except Exception:
+        except Exception as _gen_err:
+            # Surface the failure to stderr so silent-floor symptoms can be
+            # debugged. Doesn't change behavior — generated stays "" and the
+            # rollout proceeds to the no_valid_json path.
+            import sys, traceback
+            print(f"[rollout step {step}] generation error: "
+                  f"{type(_gen_err).__name__}: {_gen_err}", file=sys.stderr)
             generated = ""
 
         action_dict = _extract_action(generated)
@@ -179,21 +194,12 @@ def rollout_episode(
                 break
 
             conversation.append({"role": "assistant", "content": generated})
-
-            # Include invoice_text if present (it's only set by read_invoice).
-            # Without this, the model never sees the actual invoice content
-            # and can only emit empty/guessed PAN strings, which Pydantic
-            # rejects → silent fall-through to 0.05 floor reward.
-            obs_text_parts = [f"Step {step} result: {result.action_result[:300]}"]
-            invoice_text = getattr(result, "invoice_text", None)
-            if invoice_text:
-                obs_text_parts.append(f"Invoice content:\n{invoice_text}")
-            obs_text_parts.append(f"Available: {result.available_actions}")
-            obs_text_parts.append(
+            obs_text = (
+                f"Step {step} result: {result.action_result[:300]}\n"
+                f"Available: {result.available_actions}\n"
                 f"Steps used: {result.steps_used}/{result.max_steps}\n\n"
                 f"Output your next action as JSON:"
             )
-            obs_text = "\n".join(obs_text_parts)
             conversation.append({"role": "user", "content": obs_text})
 
         except Exception as e:
