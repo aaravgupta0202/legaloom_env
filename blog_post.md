@@ -48,6 +48,16 @@ Single-phase training on `task_hard` produced **mixed** transfer. Hard improved 
 
 **Why did `task_easy` drop?** Training focused exclusively on `task_hard` (inoperative-PAN scenarios). The model learned to be more aggressive about applying the 206AA 20% override — which is the right move on hard invoices, but the wrong move on easy invoices where the PAN is valid. With only 10 evaluation episodes, two seeds flipping from correct to incorrect is enough to swing the average by ~0.19 points. A larger evaluation set (30-100 episodes) would give a tighter estimate, but we report the numbers as they are.
 
+### How many seeds actually moved?
+
+![Win/Loss/Tie](./win_loss_tie.png)
+
+*This is the chart that puts the regression in context. Out of 10 episodes per task, 8 of the easy episodes didn't change at all — the regression comes from exactly 2 seeds flipping from correct to incorrect. On the other three tasks, training produced only wins and ties.*
+
+![Episode Waterfall](./episode_waterfall.png)
+
+*The waterfall makes the sparsity of policy movement visible. Most episodes are grey (unchanged). The two red bars on Easy are each a ~0.94-point drop — episodes that scored 0.99 under baseline but 0.05 under the trained policy. The trained model applied the 206AA override when it shouldn't have.*
+
 ![Score Distribution](./reward_distribution.png)
 
 *Score distribution across all 40 episodes (4 tasks × 10 evaluation runs each). The composite scoring function clamps outputs to (0.01, 0.99), so the distribution is heavily bimodal — a model either gets the full chain right (section + rate + amount within tolerance) and scores ~0.99, or fails on at least one component and falls toward the floor. The intermediate band around 0.4–0.6 represents partial credit, primarily on mixed-invoice cases where the model gets section right but botches the goods/services split. Training shifts the trained distribution rightward, modestly increasing the count of episodes that clear the 0.5 success threshold.*
@@ -61,6 +71,16 @@ Single-phase training on `task_hard` produced **mixed** transfer. Hard improved 
 ![GRPO Reward Curves](./reward_curves.png)
 
 *GRPO training on task_hard, 40 steps, num_generations=8. Episode reward fluctuates between 0.04 and 0.18 with notable spikes where the policy generates a successful trajectory. The bump from `num_generations=4` to 8 was made to reduce zero-variance steps where all generations score identically and GRPO has no advantage signal — see Statistical Rigor below for the actual measured fraction. Loss values are small in absolute terms because GRPO loss is the policy-gradient surrogate, not cross-entropy; what matters is that the LoRA `B` matrices moved off their zero initialization (verified diagnostically in the notebook). Loss spikes correspond to policy updates absorbing high-variance reward signal.*
+
+### Where the training signal came from
+
+![Gradient Signal](./gradient_signal.png)
+
+*Only 38% of training steps had reward variance — the rest were wasted (all 8 GRPO generations scored identically). This is a known limitation of GRPO on sparse-reward environments. More `num_generations` or a more diverse prompt distribution would help, but at 40 steps on a budget, we take what we can get.*
+
+![Score Regimes](./score_regimes.png)
+
+*The pie charts show why this environment is hard to train on: scores are almost entirely bimodal. An episode either succeeds (≥0.5) or hits the floor (<0.1). There's almost no "partial credit" zone. This makes GRPO's advantage estimation noisy — a single completion flipping from floor to success dominates the gradient.*
 
 ## Why the Numbers Survive Scrutiny
 

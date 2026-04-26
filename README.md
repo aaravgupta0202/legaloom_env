@@ -142,6 +142,16 @@ It's also worth noting that with only 10 evaluation episodes per task, the varia
 
 We report this as-is rather than cherry-picking a run where easy didn't regress. Honest reporting of mixed results is part of how we evaluate whether our training pipeline is working correctly.
 
+### How many episodes actually changed?
+
+![Win/Loss/Tie Heatmap](./win_loss_tie.png)
+
+*Out of 10 evaluation episodes per task, the vast majority produce identical scores under both the baseline and trained policy. The task_easy regression comes from just 2 episodes flipping from success to floor — not a systemic collapse. On the other three tasks, training produced only wins and ties, with zero losses.*
+
+![Per-Episode Waterfall](./episode_waterfall.png)
+
+*Per-episode score deltas (trained minus baseline) for each task. Green bars are wins, red bars are losses, grey is no change. The Easy panel makes the regression visible — two episodes dropped by ~0.94 points each (from 0.99 to 0.05). On Hard, two episodes gained small amounts. On Medium and Expert, one episode each improved. Most episodes are unchanged.*
+
 ### Score distribution
 
 ![Score Distribution](./reward_distribution.png)
@@ -161,6 +171,18 @@ We report this as-is rather than cherry-picking a run where easy didn't regress.
 *GRPO training on task_hard, 40 steps, num_generations=8. Episode reward fluctuates with notable spikes where the policy generates a successful trajectory. Grey-shaded regions (if any) show steps where all 8 generations produced identical rewards — zero advantage signal, wasted steps. Loss spikes correspond to policy updates absorbing high-variance reward signal.*
 
 Single-phase task_hard, 40 steps, `num_generations=8`. The bump from `num_generations=4` (used in earlier runs) to 8 was made to reduce zero-variance steps where all generations score identically and GRPO has no advantage signal — see the Statistical Rigor section below for the actual measured fraction. Loss values are small in absolute terms because GRPO loss is the policy-gradient surrogate, not cross-entropy; what matters is that the LoRA `B` matrices moved off their zero initialization (verified by Cell 5.5's diagnostic in the notebook).
+
+### Gradient signal
+
+![Gradient Signal Timeline](./gradient_signal.png)
+
+*Each of the 40 GRPO training steps is colored by whether it had reward variance across the 8 generations (teal = gradient signal present, coral = all 8 generations scored identically, wasted step). Only 15/40 steps (38%) provided useful signal. The zero-variance steps occur when all 8 completions happen to land on the same reward outcome — a known limitation of GRPO at small `num_generations`. Increasing `num_generations` or using a more diverse prompt distribution would help, but at higher compute cost.*
+
+### Score regime breakdown
+
+![Score Regimes](./score_regimes.png)
+
+*Where do episodes land? Each pie shows the fraction of episodes scoring in three regimes: success (≥0.5, teal), partial credit (0.1–0.5, orange), and floor (<0.1, coral). The distribution is heavily bimodal — most episodes are either successes or floor-clamps, with very few intermediates. This is why we use Wilcoxon (rank-based) rather than t-test (assumes normality) for significance testing. On Easy, training moved 2 episodes from success to floor; on Hard, the floor-dominated distribution barely shifted.*
 
 Raw artifacts: [`training_scores.json`](./training_scores.json), [`training_log.json`](./training_log.json).
 
