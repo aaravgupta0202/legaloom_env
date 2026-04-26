@@ -179,12 +179,21 @@ def rollout_episode(
                 break
 
             conversation.append({"role": "assistant", "content": generated})
-            obs_text = (
-                f"Step {step} result: {result.action_result[:300]}\n"
-                f"Available: {result.available_actions}\n"
+
+            # Include invoice_text if present (it's only set by read_invoice).
+            # Without this, the model never sees the actual invoice content
+            # and can only emit empty/guessed PAN strings, which Pydantic
+            # rejects → silent fall-through to 0.05 floor reward.
+            obs_text_parts = [f"Step {step} result: {result.action_result[:300]}"]
+            invoice_text = getattr(result, "invoice_text", None)
+            if invoice_text:
+                obs_text_parts.append(f"Invoice content:\n{invoice_text}")
+            obs_text_parts.append(f"Available: {result.available_actions}")
+            obs_text_parts.append(
                 f"Steps used: {result.steps_used}/{result.max_steps}\n\n"
                 f"Output your next action as JSON:"
             )
+            obs_text = "\n".join(obs_text_parts)
             conversation.append({"role": "user", "content": obs_text})
 
         except Exception as e:
