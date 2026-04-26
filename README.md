@@ -220,8 +220,6 @@ Each case has a deterministic ground truth; the scorer computes a composite of s
 
 **Run the benchmark yourself:** [`LegaLoom_AdversarialBenchmark.ipynb`](./LegaLoom_AdversarialBenchmark.ipynb) — supports baseline Qwen-3B, trained Qwen-3B, plus optional GPT-4o-mini, Claude Sonnet 4.5, Gemini 2.5 Pro (set `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_API_KEY` env vars).
 
-![Adversarial Benchmark Heatmap](./adversarial_heatmap.png)
-
 <!-- AUTO-ADVCAPTION-START -->
 **Trained Qwen2.5-3B beats gpt-4o on `inoperative_pan_low_base_rate`** (0.85 vs 0.30) — domain-specific RL post-training closes the gap on a category where compliance reasoning matters more than scale.
 
@@ -408,7 +406,6 @@ legaloom_env/
 ├── reward_distribution.png           # Bimodal score histogram (baseline vs trained)
 ├── episode_scatter.png               # Per-episode paired comparison (4 panels)
 ├── reward_curves.png                 # Annotated GRPO reward + loss curves
-├── adversarial_heatmap.png           # Model × failure-mode heatmap (after benchmark runs)
 ├── training_scores.json              # Raw eval numbers
 ├── training_log.json                 # TRL log_history
 ├── adversarial_results.json          # Adversarial benchmark per-model scores
