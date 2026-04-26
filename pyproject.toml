@@ -38,6 +38,23 @@ dev = [
     "pytest>=8.0.0",
     "pytest-cov>=4.0.0",
 ]
+# Pinned versions for the training pipeline. These specific combinations were
+# verified to work together on HF Space (A10G) and Colab T4. Newer transformers
+# + bitsandbytes combinations have introduced frozenset-attribute errors during
+# 4-bit model loading; these pins are reproducibility insurance.
+training = [
+    "transformers==4.49.0",
+    "trl==0.15.2",
+    "peft==0.13.2",
+    "bitsandbytes==0.45.0",
+    "accelerate==1.2.1",
+    "datasets>=2.20.0",
+]
+# Frontier-comparison APIs for the adversarial benchmark (optional)
+frontier = [
+    "anthropic>=0.40.0",
+    "google-generativeai>=0.8.0",
+]
 
 [project.scripts]
 # Server entry point - enables running via: uv run --project . server

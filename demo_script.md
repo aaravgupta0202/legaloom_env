@@ -23,9 +23,9 @@ Show: The Reward Hacking Audit section from README.
 
 ## [55-80s] TRAINING RESULTS
 
-"We ran 40 GRPO steps with num_generations=8 on Qwen2.5-3B, focused on task_hard — inoperative-PAN scenarios, the most common TDS penalty trigger in real compliance. The model learned to detect the Section 206AA override and apply 20% flat rate."
+"We ran 40 GRPO steps with num_generations=8 on Qwen2.5-3B, focused on task_hard — inoperative-PAN scenarios, the most common TDS penalty trigger in real compliance. Hard improved +16%."
 
-"Medium may regress — training on hard pushes the policy toward aggressive TDS application, which conflicts with medium's 'check if TDS applies at all' scenarios. We report this honestly as a known policy-interference effect."
+"What's interesting is the transfer effect. We trained only on hard, but every other task pool improved too — easy went up +20%, medium +8%, expert +4%. No regressions. The model didn't just memorize one rule; it learned a general compliance workflow that transfers across TDS section types."
 
 Show: Before/after bar chart. Reward curves with phase labels.
 

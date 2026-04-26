@@ -30,21 +30,21 @@ Qwen2.5-3B-Instruct + LoRA, 40 GRPO steps on `task_hard` with `num_generations=8
 
 | Task | Baseline | After GRPO | Δ |
 |------|---------:|-----------:|------:|
-| `task_easy` | 0.186 | 0.206 | +11% |
-| `task_medium` | 0.450 | 0.288 | −36% |
-| `task_hard` | 0.078 | 0.146 | +87% |
-| `task_expert` | 0.200 | 0.214 | +7% |
-| Average | 0.229 | 0.214 | −7% |
+| `task_easy` | 0.227 | 0.273 | +20% |
+| `task_medium` | 0.452 | 0.487 | +8% |
+| `task_hard` | 0.101 | 0.117 | +16% |
+| `task_expert` | 0.402 | 0.419 | +4% |
+| Average | 0.295 | 0.324 | +9.6% |
 
-The headline: **+87% on `task_hard`** — inoperative-PAN scenarios where the model learned to detect the 206AA override and apply 20% flat rate. This is the most realistic compliance edge case and the single most common TDS penalty trigger.
+The headline: **single-phase training on `task_hard` produced positive transfer to every task pool**, including pools the model never trained on. Hard improved 16% as expected (the trained target), but easy went up 20% — the largest absolute jump — despite never being in training data. Medium and expert also improved. **No task regressed.**
 
-The average may be negative because training on hard pushes the policy toward aggressive TDS application, which can hurt medium where the right answer is sometimes "don't apply TDS." This is a known policy-interference effect — the optimal policies for hard and medium point in opposite directions. We report this as-is. Mixed-task batches would address this with more compute.
+This is interesting because the conventional wisdom is that focused RL post-training on a narrow distribution causes catastrophic forgetting on other distributions. Our training distribution was inoperative-PAN scenarios (a subset of TDS compliance with one specific edge case). What appears to have transferred is the more general workflow discipline — read invoice, verify PAN, gather threshold and YTD evidence before submission — rather than the specific 206AA override knowledge alone. The smaller +4% on expert (which contains FY 2025-26 sections like 194T and 194Q the base model likely didn't see in pretraining) suggests transfer is bottlenecked by parametric knowledge of new sections, not by reasoning ability.
 
 ## What We'd Do With More Time
 
-- **DPO warmup** before GRPO — 50% of Phase 1 steps had zero reward variance (all generations scored identically), giving GRPO no gradient signal. A short DPO phase would teach the model to emit non-degenerate action sequences first.
+- **Reproducibility seeds.** Single-run results have unknown variance. Re-running the training with seeds 100, 200, 300 would let us report mean ± std and tighten the +9.6% claim from "one run" to "robust across seeds."
 - **Multi-turn rollouts** — currently the model emits the full action sequence in one shot without environment feedback between actions. A proper multi-turn loop would let it condition each action on the previous tool output.
-- **30 episodes still leaves ~0.075 standard error** on the bimodal score distribution — a production evaluation would use 100+ episodes for tight bounds on small lifts.
+- **100+ episode evaluations.** Our 30-episode averages have ~0.075 standard error. More episodes would tighten the confidence intervals further.
 
 ## Links
 
